@@ -71,6 +71,8 @@ odin build src/ -out:spotify-history-report -o:speed
 
 > Requires [Odin](https://odin-lang.org/) — `brew install odin` on macOS, or grab a release from [odin-lang.org/docs/install](https://odin-lang.org/docs/install/).
 
+> **Prefer not to build?** Download a prebuilt archive for macOS or Linux (arm64 and amd64) from the [latest release](https://github.com/ParkWardRR/spotify-history-report/releases/latest), extract it, and run `./spotify-history-report`. On macOS, clear the download quarantine flag first: `xattr -d com.apple.quarantine spotify-history-report`. Linux builds need glibc 2.35 or newer.
+
 ### 3. Run it
 
 ```bash
@@ -174,6 +176,10 @@ template/
 ```
 
 The HTML template is embedded at compile time via Odin's `#load` directive — the binary is fully self-contained. At runtime, the tool computes all metrics, serializes them as JSON, injects the blob into the template at a marker, and writes the result.
+
+### Releases
+
+`scripts/build-release.sh vX.Y.Z` builds the four archives and `SHA256SUMS` into `dist/` — macOS natively, Linux in Ubuntu 22.04 containers (OrbStack or Docker).
 
 ### How metrics are computed
 

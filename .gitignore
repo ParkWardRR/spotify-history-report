@@ -4,3 +4,4 @@ spotify-history-report
 *.o
 *.exe
 .DS_Store
+dist/
