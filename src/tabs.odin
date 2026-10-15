@@ -91,7 +91,7 @@ list_table :: proc(rows: []Row3, cw: int, value_color: Nord) -> string {
 	return join_v(out[:])
 }
 
-stacked_bar :: proc(parts: []f64, colors: []Nord, width: int) -> string {
+stacked_bar :: proc(parts: []f64, colors: []Nord, width: int, thin := false) -> string {
 	total: f64
 	for p in parts { total += p }
 	if total <= 0 || width <= 0 do return ""
@@ -103,7 +103,7 @@ stacked_bar :: proc(parts: []f64, colors: []Nord, width: int) -> string {
 		end := int(acc / total * f64(width) + 0.5)
 		n := max(0, end - used)
 		if i == len(parts) - 1 do n = width - used
-		strings.write_string(&sb, fgs(colors[i % len(colors)], repeat_str("█", n)))
+		strings.write_string(&sb, fgs(colors[i % len(colors)], repeat_str("━" if thin else "█", n)))
 		used += n
 	}
 	return strings.to_string(sb)
@@ -133,15 +133,21 @@ wrap_items :: proc(items: []string, cw: int, gap := 3) -> string {
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 
+// "January 2018" -> "Jan 2018"
+short_month_year :: proc(s: string) -> string {
+	if i := strings.index_byte(s, ' '); i > 3 do return fmt.tprintf("%s%s", s[:3], s[i:])
+	return s
+}
+
 build_overview :: proc(s: ^Stats, cw: int) -> string {
 	out := make([dynamic]string, context.temp_allocator)
 
 	days := f64(s.total_hours) / 24
 	cards := []struct{ label, value, sub: string, color: Nord }{
-		{"Total plays",     fmt_int(s.total_plays),     fmt.tprintf("%s – %s", s.date_range_start, s.date_range_end), NORD8},
+		{"Total plays",     fmt_int(s.total_plays),     fmt.tprintf("%s – %s", short_month_year(s.date_range_start), short_month_year(s.date_range_end)), NORD8},
 		{"Hours listened",  fmt_int(s.total_hours),     fmt.tprintf("≈ %.0f days nonstop", days), NORD8},
 		{"Unique artists",  fmt_int(s.unique_artists),  fmt.tprintf("top 10 = %.0f%% of time", s.concentration_top10), NORD9},
-		{"Unique tracks",   fmt_int(s.unique_tracks),   fmt.tprintf("half of plays: %s songs", fmt_int(s.songs_for_half)), NORD9},
+		{"Unique tracks",   fmt_int(s.unique_tracks),   fmt.tprintf("half of plays in %s", fmt_int(s.songs_for_half)), NORD9},
 		{"Longest streak",  fmt.tprintf("%d days", s.longest_streak), "consecutive days", NORD14},
 		{"Peak hour",       fmt.tprintf("%02d:00", s.peak_hour), fmt.tprintf("%dh total", s.peak_hour_val), NORD13},
 		{"Peak day",        s.peak_day, fmt.tprintf("%dh total", s.peak_day_hours), NORD13},
@@ -190,7 +196,7 @@ build_overview :: proc(s: ^Stats, cw: int) -> string {
 			for v in values { hi = max(hi, v) }
 			for v, i in values {
 				append(&out, strings.concatenate({
-					muted(labels[i]), " ", hbar(v, hi, cw - 12, NORD10, NORD8), " ", fgs(COL_TEXT, pad_left(subs[i], 5)),
+					muted(labels[i]), " ", hbar(v, hi, cw - 12, NORD10, NORD8, thin = true), " ", fgs(COL_TEXT, pad_left(subs[i], 5)),
 				}, context.temp_allocator))
 			}
 		}
@@ -207,7 +213,7 @@ build_overview :: proc(s: ^Stats, cw: int) -> string {
 			append(&out, strings.concatenate({
 				fgs(rank_color(i), pad_left(fmt.tprintf("%d", i + 1), 2), i < 3), "  ",
 				fgs(COL_BRIGHT, pad_right(a.name, nw)), " ",
-				hbar(a.hours, hi, bw, NORD10, NORD8), " ",
+				hbar(a.hours, hi, bw, NORD10, NORD8, thin = true), " ",
 				fgs(COL_TEXT, pad_left(fmt.tprintf("%.0fh", a.hours), 5)),
 			}, context.temp_allocator))
 		}
@@ -258,7 +264,7 @@ build_artists :: proc(s: ^Stats, cw: int) -> string {
 			append(&out, strings.concatenate({
 				fgs(rank_color(i), pad_left(fmt.tprintf("%d", i + 1), 2), i < 3), "  ",
 				fgs(COL_BRIGHT, pad_right(a.name, nw)), " ",
-				hbar(a.hours, hi, bw, NORD10, NORD8), " ",
+				hbar(a.hours, hi, bw, NORD10, NORD8, thin = true), " ",
 				fgs(COL_TEXT, pad_left(fmt.tprintf("%.0fh", a.hours), 5)),
 			}, context.temp_allocator))
 		}
@@ -373,7 +379,7 @@ build_rhythm :: proc(s: ^Stats, cw: int) -> string {
 			}
 			append(&out, strings.concatenate({
 				fgs(COL_ACCENT, fmt.tprintf("%d", yh.year), true), " ",
-				hbar(yh.hours, hi, bw, NORD10, NORD8), " ",
+				hbar(yh.hours, hi, bw, NORD10, NORD8, thin = true), " ",
 				fgs(COL_TEXT, pad_left(fmt.tprintf("%.0fh", yh.hours), 5)), "  ",
 				muted(avg),
 			}, context.temp_allocator))
@@ -388,7 +394,7 @@ build_rhythm :: proc(s: ^Stats, cw: int) -> string {
 		colors := [?]Nord{NORD14, NORD8, NORD3}
 		bw := max(10, cw - 6 - 24)
 		for e in s.explore_obsess {
-			bar := stacked_bar({f64(e.new_pct), f64(e.top10_pct), f64(e.rest_pct)}, colors[:], bw)
+			bar := stacked_bar({f64(e.new_pct), f64(e.top10_pct), f64(e.rest_pct)}, colors[:], bw, thin = true)
 			append(&out, strings.concatenate({
 				fgs(COL_ACCENT, fmt.tprintf("%d", e.year), true), " ", bar, "  ",
 				muted(fmt.tprintf("%d new artists", e.new_count)),

@@ -21,28 +21,34 @@ EIGHTHS := [?]string{" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"
 
 // Horizontal bar with 1/8-cell precision. Returns exactly `width` columns.
 // If `to` is set the bar is a gradient from `from` to `to`.
-hbar :: proc(value, max_value: f64, width: int, from: Nord, to: Maybe(Nord) = nil, track := true) -> string {
+// `thin` draws it with heavy line glyphs (━ ╸) over a hairline track (─)
+// instead of blocks, so bars on consecutive rows don't fuse into one slab.
+hbar :: proc(value, max_value: f64, width: int, from: Nord, to: Maybe(Nord) = nil, track := true, thin := false) -> string {
 	if width <= 0 do return ""
 	frac := clamp(value / max(max_value, 1e-9), 0, 1)
 	eighths := int(frac * f64(width) * 8 + 0.5)
 	full := eighths / 8
 	part := eighths % 8
+	if thin do part = 8 if part >= 4 else 0 // half-cell resolution is enough
+
+	shade :: proc(from: Nord, to: Maybe(Nord), i, width: int) -> Nord {
+		if t, ok := to.?; ok do return lerp_color(from, t, f64(i) / f64(max(width - 1, 1)))
+		return from
+	}
 
 	sb := strings.builder_make(context.temp_allocator)
 	for i in 0 ..< full {
-		c := from
-		if t, ok := to.?; ok do c = lerp_color(from, t, f64(i) / f64(max(width - 1, 1)))
-		strings.write_string(&sb, fgs(c, "█"))
+		strings.write_string(&sb, fgs(shade(from, to, i, width), "━" if thin else "█"))
 	}
 	used := full
 	if part > 0 && full < width {
-		c := from
-		if t, ok := to.?; ok do c = lerp_color(from, t, f64(full) / f64(max(width - 1, 1)))
-		strings.write_string(&sb, fgs(c, EIGHTHS[part]))
+		glyph := EIGHTHS[part]
+		if thin do glyph = "╸"
+		strings.write_string(&sb, fgs(shade(from, to, full, width), glyph))
 		used += 1
 	}
 	if track && used < width {
-		strings.write_string(&sb, faint(repeat_str("░", width - used)))
+		strings.write_string(&sb, faint(repeat_str("─" if thin else "░", width - used)))
 	} else if used < width {
 		strings.write_string(&sb, spaces(width - used))
 	}
@@ -61,7 +67,8 @@ progress_view :: proc(pct: f64, width: int, show_pct := true) -> string {
 	return strings.concatenate({bar, muted(pct_s)}, context.temp_allocator)
 }
 
-SPARK_LEVELS := [?]string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+// Capped at ▆ so sparklines on consecutive rows keep a gap between them.
+SPARK_LEVELS := [?]string{"▁", "▂", "▃", "▄", "▅", "▆"}
 
 sparkline :: proc(values: []f64, color: Nord) -> string {
 	if len(values) == 0 do return ""

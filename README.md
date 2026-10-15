@@ -25,6 +25,12 @@
   <img src="https://img.shields.io/badge/zero-dependencies-B48EAD?style=flat-square" alt="Deps">
 </p>
 
+<p align="center">
+  <img src="docs/tui-demo.gif" alt="The spotify-history-report terminal UI: pipeline progress, then a tabbed dashboard" width="860">
+  <br>
+  <sub>The terminal UI, running on generated placeholder data (fictional artists).</sub>
+</p>
+
 ---
 
 ## What is this?
@@ -121,6 +127,17 @@ While your data is processed you get a live pipeline view; when it finishes the 
 | **Library** | Top albums, earworms, session openers, never-skipped |
 | **Rhythm** | Weekday × hour heatmap, year by year, explore vs. obsess |
 | **Genres** | Genre mix bar and per-genre sparklines over time |
+
+<table>
+  <tr>
+    <td><img src="docs/tui-overview.png" alt="Overview tab"><br><sub><b>Overview</b> — stat cards, highlights, hours by year</sub></td>
+    <td><img src="docs/tui-artists.png" alt="Artists tab"><br><sub><b>Artists</b> — top 25 and the lifers</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/tui-rhythm.png" alt="Rhythm tab"><br><sub><b>Rhythm</b> — weekday × hour heatmap, explore vs. obsess</sub></td>
+    <td><img src="docs/tui-genres.png" alt="Genres tab"><br><sub><b>Genres</b> — genre mix and per-genre sparklines</sub></td>
+  </tr>
+</table>
 
 Keys: `tab` / `←` `→` / `1`–`5` switch tabs · `↑` `↓` `j` `k` / mouse wheel scroll · `o` open the report · `q` quit.
 `--setup` is a TUI too (provider picker, masked key entry with paste support).
