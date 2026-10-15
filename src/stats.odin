@@ -2,6 +2,7 @@ package spotify_report
 
 import "core:fmt"
 import "core:slice"
+import "core:strings"
 
 Track_Key :: struct {
 	track:  string,
@@ -145,7 +146,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	dow_ms: map[int]i64
 	defer delete(dow_ms)
 	for &p in plays { dow_ms[p.weekday] += p.ms }
-	dow_names := [7]string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+	dow_names := [7]string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 	peak_d := 0
 	peak_dv: i64 = 0
 	for d in 0..<7 {
@@ -281,6 +282,254 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	}
 	if cur_streak > max_streak do max_streak = cur_streak
 	stats.longest_streak = max_streak
+
+	// Earworms: 7-day sliding window per track
+	{
+		track_plays_list: map[Track_Key][dynamic]int
+		defer {
+			for _, &v in track_plays_list { delete(v) }
+			delete(track_plays_list)
+		}
+		track_plays_month: map[Track_Key][dynamic][2]int  // parallel arrays of {month, year}
+		defer {
+			for _, &v in track_plays_month { delete(v) }
+			delete(track_plays_month)
+		}
+
+		for &p in plays {
+			k := Track_Key{p.track, p.artist}
+			day_num := p.year * 366 + p.month * 31 + p.day
+			if k not_in track_plays_list {
+				track_plays_list[k] = {}
+				track_plays_month[k] = {}
+			}
+			append(&track_plays_list[k], day_num)
+			append(&track_plays_month[k], [2]int{p.month, p.year})
+		}
+
+		earworm_list: [dynamic]Earworm_Stat
+		defer delete(earworm_list)
+		earworm_total_count := 0
+
+		for k, &days in track_plays_list {
+			if len(days) < 5 do continue
+			slice.sort(days[:])
+			months := track_plays_month[k]
+
+			best_count := 0
+			best_idx := 0
+
+			// Sliding window: for each play, count how many plays fall within 7 days
+			for i in 0..<len(days) {
+				count := 0
+				for j in i..<len(days) {
+					if days[j] - days[i] < 7 {
+						count += 1
+					} else {
+						break
+					}
+				}
+				if count > best_count {
+					best_count = count
+					best_idx = i
+				}
+			}
+
+			if best_count >= 5 {
+				month_names := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+				m := months[best_idx][0]
+				y := months[best_idx][1]
+				period := fmt.aprintf("%s %d", month_names[m], y)
+				append(&earworm_list, Earworm_Stat{k.track, k.artist, best_count, period})
+			}
+			if best_count >= 15 {
+				earworm_total_count += 1
+			}
+		}
+
+		slice.sort_by(earworm_list[:], proc(a, b: Earworm_Stat) -> bool { return a.plays > b.plays })
+
+		stats.earworm_total = earworm_total_count
+		for i in 0..<min(20, len(earworm_list)) {
+			append(&stats.earworms, earworm_list[i])
+		}
+		if len(earworm_list) > 0 {
+			stats.worst_earworm = earworm_list[0]
+		}
+	}
+
+	// Skip rate per year (first and last years)
+	if len(years) > 0 {
+		first_yr := years[0]
+		last_yr := years[len(years) - 1]
+
+		first_total := 0
+		first_skipped := 0
+		last_total := 0
+		last_skipped := 0
+
+		for &p in plays {
+			if p.year == first_yr {
+				first_total += 1
+				if p.skipped do first_skipped += 1
+			}
+			if p.year == last_yr {
+				last_total += 1
+				if p.skipped do last_skipped += 1
+			}
+		}
+
+		stats.skip_rate_first_yr = first_yr
+		stats.skip_rate_last_yr = last_yr
+		if first_total > 0 {
+			stats.skip_rate_first = first_skipped * 100 / first_total
+		}
+		if last_total > 0 {
+			stats.skip_rate_last = last_skipped * 100 / last_total
+		}
+	}
+
+	// Average track length per year
+	{
+		year_ms_sum: map[int]i64
+		year_count: map[int]int
+		defer { delete(year_ms_sum); delete(year_count) }
+
+		for &p in plays {
+			year_ms_sum[p.year] += p.ms
+			year_count[p.year] += 1
+		}
+
+		for y in years {
+			ms_sum: i64 = 0
+			cnt := 0
+			if y in year_ms_sum { ms_sum = year_ms_sum[y] }
+			if y in year_count { cnt = year_count[y] }
+			minutes: f64 = 0
+			if cnt > 0 {
+				minutes = f64(ms_sum) / f64(cnt) / 60000
+			}
+			append(&stats.avg_track_length, Year_Avg_Len{y, minutes})
+		}
+
+		if len(years) > 0 {
+			first_yr := years[0]
+			last_yr := years[len(years) - 1]
+			stats.avg_len_first_yr = first_yr
+			stats.avg_len_last_yr = last_yr
+			for &atl in stats.avg_track_length {
+				if atl.year == first_yr do stats.avg_len_first = atl.minutes
+				if atl.year == last_yr  do stats.avg_len_last = atl.minutes
+			}
+		}
+	}
+
+	// Concentration: top 10 artists as % of total time
+	{
+		total_all_ms: i64 = 0
+		for _, ms in artist_ms { total_all_ms += ms }
+
+		// Sort artist_ms by value descending
+		artist_ms_sorted: [dynamic]i64
+		defer delete(artist_ms_sorted)
+		for _, ms in artist_ms {
+			append(&artist_ms_sorted, ms)
+		}
+		slice.sort_by(artist_ms_sorted[:], proc(a, b: i64) -> bool { return a > b })
+
+		top10_ms: i64 = 0
+		for i in 0..<min(10, len(artist_ms_sorted)) {
+			top10_ms += artist_ms_sorted[i]
+		}
+		if total_all_ms > 0 {
+			stats.concentration_top10 = f64(top10_ms) / f64(total_all_ms) * 100
+		}
+	}
+
+	// Songs for half: how many tracks account for 50% of total plays
+	{
+		track_counts: [dynamic]int
+		defer delete(track_counts)
+		for _, c in track_play_count {
+			append(&track_counts, c)
+		}
+		slice.sort_by(track_counts[:], proc(a, b: int) -> bool { return a > b })
+
+		total_all := len(plays)
+		half := total_all / 2
+		running := 0
+		count := 0
+		for c in track_counts {
+			running += c
+			count += 1
+			if running >= half do break
+		}
+		stats.songs_for_half = count
+	}
+
+	// Peak day hours
+	{
+		peak_dow_ms: i64 = 0
+		if peak_d in dow_ms { peak_dow_ms = dow_ms[peak_d] }
+		stats.peak_day_hours = int(peak_dow_ms / 3600000)
+	}
+
+	// Platforms
+	{
+		platform_counts: map[string]int
+		defer delete(platform_counts)
+
+		classify_platform :: proc(raw: string) -> string {
+			if strings.contains(raw, "iPhone") || strings.contains(raw, "iOS") {
+				return "iPhone"
+			} else if strings.contains(raw, "OS X") || strings.contains(raw, "Mac") || strings.contains(raw, "macOS") {
+				return "Mac"
+			} else if strings.contains(raw, "Windows") {
+				return "Windows"
+			} else if strings.contains(raw, "Android") {
+				return "Android"
+			} else if len(raw) == 0 {
+				return "Unknown"
+			}
+			return "Other"
+		}
+
+		for &p in plays {
+			name := classify_platform(p.platform)
+			platform_counts[name] += 1
+		}
+
+		plat_list: [dynamic]Platform_Stat
+		defer delete(plat_list)
+		for name, count in platform_counts {
+			append(&plat_list, Platform_Stat{name, count})
+		}
+		slice.sort_by(plat_list[:], proc(a, b: Platform_Stat) -> bool { return a.count > b.count })
+
+		for &ps in plat_list {
+			append(&stats.platforms, ps)
+		}
+	}
+
+	// Top artists by year (top 5 per year)
+	for y in years {
+		if y not_in year_artist_ms do continue
+		yam := year_artist_ms[y]
+
+		yr_artists: [dynamic]Artist_Stat
+		defer delete(yr_artists)
+		for a, ms in yam {
+			append(&yr_artists, Artist_Stat{a, f64(ms) / 3600000})
+		}
+		slice.sort_by(yr_artists[:], proc(a, b: Artist_Stat) -> bool { return a.hours > b.hours })
+
+		yt: Year_Top
+		yt.year = y
+		for i in 0..<min(5, len(yr_artists)) {
+			append(&yt.artists, yr_artists[i])
+		}
+		append(&stats.top_by_year, yt)
+	}
 
 	return stats
 }

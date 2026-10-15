@@ -54,16 +54,32 @@ Stats :: struct {
 	n_years:          int,
 	loyalists:        [dynamic]Artist_Stat,
 	most_played_song: Track_Stat,
-	earworms:         [dynamic]Earworm_Stat,
-	longest_streak:   int,
-	heatmap:          [dynamic]JSON_HM,
-	explore_obsess:   [dynamic]JSON_Explore,
+	earworms:           [dynamic]Earworm_Stat,
+	earworm_total:      int,
+	worst_earworm:      Earworm_Stat,
+	longest_streak:     int,
+	heatmap:            [dynamic]JSON_HM,
+	explore_obsess:     [dynamic]JSON_Explore,
+	skip_rate_first:    int,
+	skip_rate_last:     int,
+	skip_rate_first_yr: int,
+	skip_rate_last_yr:  int,
+	avg_len_first:      f64,
+	avg_len_last:       f64,
+	avg_len_first_yr:   int,
+	avg_len_last_yr:    int,
+	concentration_top10: f64,
+	songs_for_half:     int,
+	peak_day_hours:     int,
+	platforms:          [dynamic]Platform_Stat,
+	top_by_year:        [dynamic]Year_Top,
+	avg_track_length:   [dynamic]Year_Avg_Len,
 	// Genre data (populated when LLM or cache available)
-	genre_area:       [dynamic]Genre_Quarter,
-	genre_order:      [dynamic]string,
-	genre_colors:     map[string]string,
-	genre_classified: int,
-	genre_other_pct:  f64,
+	genre_area:         [dynamic]Genre_Quarter,
+	genre_order:        [dynamic]string,
+	genre_colors:       map[string]string,
+	genre_classified:   int,
+	genre_other_pct:    f64,
 }
 
 Genre_Quarter :: struct {
@@ -127,6 +143,21 @@ Year_Hours :: struct {
 	hours: f64,
 }
 
+Platform_Stat :: struct {
+	name:  string,
+	count: int,
+}
+
+Year_Top :: struct {
+	year:    int,
+	artists: [dynamic]Artist_Stat,
+}
+
+Year_Avg_Len :: struct {
+	year:    int,
+	minutes: f64,
+}
+
 parse_int :: proc(s: string) -> int {
 	result := 0
 	for c in s {
@@ -179,7 +210,8 @@ parse_ts_fields :: proc(ts: string) -> (year, month, day, hour, minute, weekday:
 	j := zy / 100
 	dow := (q + (13 * (zm + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7
 	if dow < 0 do dow += 7
-	weekday = dow
+	// Convert from Zeller (0=Sun..6=Sat) to ISO (0=Mon..6=Sun)
+	weekday = (dow + 6) % 7
 	return
 }
 

@@ -32,6 +32,8 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 
 	w(&j, "{")
 	wf(&j, "\"total_plays\":%d,", s.total_plays)
+	// NOTE: In format strings below, {{ and }} produce literal { and }
+	// because Odin's fmt treats { as a format specifier opener.
 	wf(&j, "\"total_hours\":%d,", s.total_hours)
 	wf(&j, "\"unique_artists\":%d,", s.unique_artists)
 	wf(&j, "\"unique_tracks\":%d,", s.unique_tracks)
@@ -43,25 +45,50 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	wf(&j, "\"peak_hour_val\":%d,", s.peak_hour_val)
 	wf(&j, "\"peak_day\":\"%s\",", s.peak_day)
 	wf(&j, "\"loyal_count\":%d,", s.loyal_count)
+	wf(&j, "\"peak_day_hours\":%d,", s.peak_day_hours)
 	wf(&j, "\"genre_subtitle\":\"Quarterly share of listening time by genre.\",")
 	wf(&j, "\"heatmap_title\":\"When I listen\",")
+	wf(&j, "\"genre_classified\":%d,", s.genre_classified)
+
+	// Skip rate
+	wf(&j, "\"skip_rate_first\":%d,", s.skip_rate_first)
+	wf(&j, "\"skip_rate_last\":%d,", s.skip_rate_last)
+	wf(&j, "\"skip_rate_first_yr\":%d,", s.skip_rate_first_yr)
+	wf(&j, "\"skip_rate_last_yr\":%d,", s.skip_rate_last_yr)
+
+	// Avg track length
+	wf(&j, "\"avg_len_first\":%.1f,", s.avg_len_first)
+	wf(&j, "\"avg_len_last\":%.1f,", s.avg_len_last)
+	wf(&j, "\"avg_len_first_yr\":%d,", s.avg_len_first_yr)
+	wf(&j, "\"avg_len_last_yr\":%d,", s.avg_len_last_yr)
+
+	// Concentration
+	wf(&j, "\"concentration_top10\":%.1f,", s.concentration_top10)
+	wf(&j, "\"songs_for_half\":%d,", s.songs_for_half)
+
+	// Worst earworm
+	wf(&j, "\"earworm_total\":%d,", s.earworm_total)
+	if len(s.worst_earworm.track) > 0 {
+		wf(&j, "\"worst_earworm\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}},",
+			esc(s.worst_earworm.track), esc(s.worst_earworm.artist), s.worst_earworm.plays, s.worst_earworm.period)
+	}
 
 	last_yr := s.hours_by_year[len(s.hours_by_year)-1].year if len(s.hours_by_year) > 0 else 2026
 	wf(&j, "\"hours_subtitle\":\"%d in progress.\",", last_yr)
 
 	// Most played song
-	wf(&j, "\"most_played_song\":{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d},",
+	wf(&j, "\"most_played_song\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}},",
 		esc(s.most_played_song.track), esc(s.most_played_song.artist), s.most_played_song.plays)
 
 	// Biggest day
-	wf(&j, "\"biggest_day\":{\"date\":\"%s\",\"plays\":%d,\"hours\":%.1f},",
+	wf(&j, "\"biggest_day\":{{\"date\":\"%s\",\"plays\":%d,\"hours\":%.1f}},",
 		s.biggest_day.date, s.biggest_day.plays, s.biggest_day.hours)
 
 	// Hours by year
 	w(&j, "\"hours_by_year\":[")
 	for &yh, i in s.hours_by_year {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"year\":%d,\"hours\":%.1f}", yh.year, yh.hours)
+		wf(&j, "{{\"year\":%d,\"hours\":%.1f}}", yh.year, yh.hours)
 	}
 	w(&j, "],")
 
@@ -69,7 +96,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"top_artists\":[")
 	for &a, i in s.top_artists {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"name\":\"%s\",\"hours\":%.1f}", esc(a.name), a.hours)
+		wf(&j, "{{\"name\":\"%s\",\"hours\":%.1f}}", esc(a.name), a.hours)
 	}
 	w(&j, "],")
 
@@ -77,7 +104,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"top_albums\":[")
 	for &a, i in s.top_albums {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"album\":\"%s\",\"artist\":\"%s\",\"hours\":%.1f}", esc(a.album), esc(a.artist), a.hours)
+		wf(&j, "{{\"album\":\"%s\",\"artist\":\"%s\",\"hours\":%.1f}}", esc(a.album), esc(a.artist), a.hours)
 	}
 	w(&j, "],")
 
@@ -85,7 +112,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"session_openers\":[")
 	for &o, i in s.session_openers {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"count\":%d}", esc(o.track), esc(o.artist), o.count)
+		wf(&j, "{{\"track\":\"%s\",\"artist\":\"%s\",\"count\":%d}}", esc(o.track), esc(o.artist), o.count)
 	}
 	w(&j, "],")
 
@@ -93,7 +120,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"never_skipped\":[")
 	for &ns, i in s.never_skipped {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}", esc(ns.track), esc(ns.artist), ns.plays)
+		wf(&j, "{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}}", esc(ns.track), esc(ns.artist), ns.plays)
 	}
 	w(&j, "],")
 
@@ -101,7 +128,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"earworms\":[")
 	for &e, i in s.earworms {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}", esc(e.track), esc(e.artist), e.plays, e.period)
+		wf(&j, "{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}}", esc(e.track), esc(e.artist), e.plays, e.period)
 	}
 	w(&j, "],")
 
@@ -109,7 +136,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"loyalists\":[")
 	for &l, i in s.loyalists {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"name\":\"%s\",\"hours\":%.1f}", esc(l.name), l.hours)
+		wf(&j, "{{\"name\":\"%s\",\"hours\":%.1f}}", esc(l.name), l.hours)
 	}
 	w(&j, "],")
 
@@ -117,7 +144,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"explore_obsess\":[")
 	for &e, i in s.explore_obsess {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"year\":%d,\"new_pct\":%d,\"top10_pct\":%d,\"rest_pct\":%d,\"new_count\":%d,\"total_artists\":%d}",
+		wf(&j, "{{\"year\":%d,\"new_pct\":%d,\"top10_pct\":%d,\"rest_pct\":%d,\"new_count\":%d,\"total_artists\":%d}}",
 			e.year, e.new_pct, e.top10_pct, e.rest_pct, e.new_count, e.total_artists)
 	}
 	w(&j, "],")
@@ -126,7 +153,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"heatmap\":[")
 	for &h, i in s.heatmap {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{\"day\":%d,\"hour\":%d,\"hours\":%.1f}", h.day, h.hour, h.hours)
+		wf(&j, "{{\"day\":%d,\"hour\":%d,\"hours\":%.1f}}", h.day, h.hour, h.hours)
 	}
 	w(&j, "],")
 
@@ -150,13 +177,29 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"genre_area\":[")
 	for &gq, qi in s.genre_area {
 		if qi > 0 do w(&j, ",")
-		wf(&j, "{\"quarter\":\"%s\"", gq.quarter)
+		wf(&j, "{{\"quarter\":\"%s\"", gq.quarter)
 		for &g in s.genre_order {
 			v: f64 = 0
 			if g in gq.values { v = gq.values[g] }
 			wf(&j, ",\"%s\":%.1f", esc(g), v)
 		}
 		w(&j, "}")
+	}
+	w(&j, "],")
+
+	// Avg track length per year
+	w(&j, "\"avg_track_length\":[")
+	for &a, i in s.avg_track_length {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{{\"year\":%d,\"minutes\":%.1f}}", a.year, a.minutes)
+	}
+	w(&j, "],")
+
+	// Platforms
+	w(&j, "\"platforms\":[")
+	for &p, i in s.platforms {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{{\"name\":\"%s\",\"count\":%d}}", esc(p.name), p.count)
 	}
 	w(&j, "]")
 
