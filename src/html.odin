@@ -216,6 +216,5 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	strings.write_string(&result, strings.to_string(j))
 	strings.write_string(&result, tmpl[marker_pos + len(DATA_MARKER):])
 
-	_ = os.write_entire_file(output_path, transmute([]u8)strings.to_string(result))
-	return true
+	return os.write_entire_file(output_path, transmute([]u8)strings.to_string(result)) == nil
 }

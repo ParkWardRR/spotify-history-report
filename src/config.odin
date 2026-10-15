@@ -67,7 +67,7 @@ load_config :: proc() -> Config {
 
 save_config :: proc(cfg: Config) -> bool {
 	dir := config_dir()
-	os.make_directory(dir)
+	if err := os.make_directory_all(dir, {.Read_User, .Write_User, .Execute_User}); err != nil && err != .Exist do return false
 
 	j := strings.builder_make()
 	defer strings.builder_destroy(&j)
@@ -81,8 +81,8 @@ save_config :: proc(cfg: Config) -> bool {
 	strings.write_string(&j, "}\n")
 
 	path := config_path()
-	_ = os.write_entire_file(path, transmute([]u8)strings.to_string(j))
-	return true
+	// The file holds API keys: owner-only.
+	return os.write_entire_file(path, transmute([]u8)strings.to_string(j), {.Read_User, .Write_User}) == nil
 }
 
 resolve_provider :: proc(cfg: Config) -> (LLM_Provider, string, string) {

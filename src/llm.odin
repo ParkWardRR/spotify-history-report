@@ -41,15 +41,13 @@ classify_artists_llm :: proc(
 		end := min(start + BATCH_SIZE, len(unclassified))
 		batch := unclassified[start:end]
 
-		draw_progress_bar("  Classifying...", batch_idx + 1, total_batches)
-
 		batch_result := call_llm_genre(batch, provider, api_key, model)
 		for a, g in batch_result {
 			result[a] = g
 		}
 		delete(batch_result)
+		stage_msg(.Genres, .Active, fmt.aprintf("%s · %s", provider_name(provider), model), batch_idx + 1, total_batches)
 	}
-	fmt.println()
 
 	return result
 }

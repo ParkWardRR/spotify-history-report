@@ -110,59 +110,42 @@ All artist and track names in the sample are made up — no real listening data 
 
 ## The TUI
 
-The tool shows a live terminal dashboard while it works, styled with the [Nord](https://www.nordtheme.com/) color palette:
+A full-screen terminal app built on a small port of [Bubble Tea](https://github.com/charmbracelet/bubbletea)'s Elm architecture (Model / Update / View, a message queue fed by a worker thread, timer commands, and a line-diffing renderer) with [Lip Gloss](https://github.com/charmbracelet/lipgloss)-style styling and [Bubbles](https://github.com/charmbracelet/bubbles)-style components (spinner, gradient progress bar, viewport, text input).
 
-```
-  ▗▄▄▄▖
-  ▐   ▌  spotify-history-report
-  ▝▀▀▀▘  Generate listening infographics from GDPR data
+While your data is processed you get a live pipeline view; when it finishes the report is written and you land in a tabbed dashboard:
 
-  Scanning ─
-  8 files found
+| Tab | Contents |
+|:----|:---------|
+| **Overview** | Stat cards, highlights, hours-by-year column chart, top artists, platforms |
+| **Artists** | Top 25 bars, the lifers, top artists by year |
+| **Library** | Top albums, earworms, session openers, never-skipped |
+| **Rhythm** | Weekday × hour heatmap, year by year, explore vs. obsess |
+| **Genres** | Genre mix bar and per-genre sparklines over time |
 
-  Loading ─
-  Loading...  ████████████████████████████████████████ 100%
-  58318 records, 43961 qualifying plays
+Keys: `tab` / `←` `→` / `1`–`5` switch tabs · `↑` `↓` `j` `k` / mouse wheel scroll · `o` open the report · `q` quit.
+`--setup` is a TUI too (provider picker, masked key entry with paste support).
 
-  Computing ─
-  Done
+### Theme
 
-  ──────────────────────────────────────────────────────────────────
+Colors are the [Nord](https://www.nordtheme.com/) palette. In terminals with truecolor (`COLORTERM=truecolor`) the exact RGB values are used. Everywhere else the TUI sticks to the 16 ANSI slots using the same mapping as the official [Nord Terminal.app theme](https://github.com/nordtheme/terminal-app) (black=nord1, red=nord11, green=nord14, yellow=nord13, blue=nord9, magenta=nord15, cyan=nord8, white=nord5, bright black=nord3, bright cyan=nord7, bright white=nord6), so installing that theme makes it look right in Terminal.app. Override detection with `SHR_COLOR=truecolor|256|ansi|none`; `NO_COLOR` is respected.
 
-  Dashboard ─
-
-  │ Total plays              43961
-  │ Total hours              2185
-  │ Unique artists           4366
-  │ Unique tracks            10574
-  │ Loyal artists            35 (8 years)
-  │ Peak hour                18:00 (194h total)
-  │ Most played              "Warm Static" (139×)
-  │ Genres mapped            3842 artists (2.3% Other)
-
-  Top artists ─
-
-  Neon Dusk      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 72.5 h
-  Velvet Signal  ▓▓▓▓▓▓▓▓▓▓▓▓▓                  31.5 h
-  Coastal Haze   ▓▓▓▓▓▓▓▓▓▓▓▓                   29.6 h
-  Phantom Choir  ▓▓▓▓▓▓▓▓▓                      23.2 h
-  Solar Draft    ▓▓▓▓▓▓▓▓▓                      21.9 h
-
-  ──────────────────────────────────────────────────────────────────
-
-  Generating report ─
-
-  ✓ Report written to:
-    report.html
-```
+When stdout isn't a terminal (or with `--plain`) it prints simple progress lines instead.
 
 ## Architecture
 
 ```
 src/
-├── main.odin      entry point, CLI flags, guided setup, LLM orchestration
-├── nord.odin      Nord palette constants (Polar Night → Aurora)
-├── tui.odin       terminal rendering: progress bars, stat cards, mini charts
+├── main.odin      entry point, CLI flags, TUI / plain-mode dispatch
+├── pipeline.odin  scan → load → compute → genres → report, reporting via `emit`
+├── nord.odin      Nord palette + Nord.terminal ANSI slot mapping
+├── term.odin      raw mode, window size, key/mouse/paste input decoding
+├── tea.odin       Bubble Tea runtime: Msg/Cmd, event loop, diffing renderer
+├── style.odin     Lip Gloss subset: colors, styles, borders, width, joins
+├── widgets.odin   spinner, progress, viewport, text input, bars, sparklines
+├── app.odin       main model: progress screen + tabbed dashboard
+├── tabs.odin      dashboard tab contents
+├── setup.odin     `--setup` TUI
+├── tui.odin       static screens: --help, --guide
 ├── parser.odin    Spotify JSON deserialization, timestamp parsing (UTC→PST)
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache

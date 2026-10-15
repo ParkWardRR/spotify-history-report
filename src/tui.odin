@@ -1,134 +1,110 @@
 package spotify_report
 
+// Static (non-interactive) screens: --help and --guide. Same styling system as
+// the live TUI, printed once.
+
 import "core:fmt"
 import "core:strings"
 
-ESC :: "\x1b"
-
-fg :: proc(c: Nord) -> string {
-	return fmt.aprintf("%s[38;2;%d;%d;%dm", ESC, c.r, c.g, c.b)
+heading :: proc(title: string) -> string {
+	return fmt.tprintf("  %s", fgs(COL_ACCENT2, title, true))
 }
 
-bg :: proc(c: Nord) -> string {
-	return fmt.aprintf("%s[48;2;%d;%d;%dm", ESC, c.r, c.g, c.b)
+// "  -o, --output <file>   Output HTML path (default: …)"
+opt_line :: proc(flag, desc: string, note := "") -> string {
+	line := fmt.tprintf("    %s %s", fgs(COL_TEXT, pad_right(flag, 24)), desc)
+	if len(note) > 0 do line = fmt.tprintf("%s %s", line, muted(note))
+	return line
 }
 
-RESET :: "\x1b[0m"
-BOLD  :: "\x1b[1m"
-DIM   :: "\x1b[2m"
-
-clear_screen :: proc() {
-	fmt.printf("%s[2J%s[H", ESC, ESC)
+print_block :: proc(lines: ..string) {
+	fmt.println(strings.join(lines, "\n", context.temp_allocator))
+	free_all(context.temp_allocator)
 }
 
-hide_cursor :: proc() {
-	fmt.printf("%s[?25l", ESC)
+print_usage :: proc() {
+	print_block(
+		"",
+		indent_block(logo_block(), 2),
+		"",
+		fmt.tprintf("  %s  spotify-history-report %s [options]", fgs(COL_BRIGHT, "Usage", true), fgs(COL_ACCENT, "<data-dir>")),
+		"",
+		heading("Arguments"),
+		opt_line("<data-dir>", "Directory with Streaming_History_Audio_*.json"),
+		"",
+		heading("Options"),
+		opt_line("-o, --output <file>", "Output HTML path", "(default: spotify_report.html)"),
+		opt_line("--openai-key <key>", "OpenAI API key for genre classification"),
+		opt_line("--anthropic-key <key>", "Anthropic API key", "(Claude)"),
+		opt_line("--openrouter-key <key>", "OpenRouter API key", "(any model)"),
+		opt_line("--model <model>", "Override the LLM model"),
+		opt_line("--plain", "No TUI; print progress as plain lines"),
+		opt_line("--setup", "Interactive config setup", "(saves to ~/.config)"),
+		opt_line("--guide", "How to get your Spotify data export"),
+		"",
+		heading("Environment"),
+		opt_line("ANTHROPIC_API_KEY", "Anthropic key", "(overrides config)"),
+		opt_line("OPENAI_API_KEY", "OpenAI key", "(overrides config)"),
+		opt_line("OPENROUTER_API_KEY", "OpenRouter key", "(overrides config)"),
+		opt_line("SHR_COLOR", "truecolor | 256 | ansi | none", "(default: auto)"),
+		"",
+		heading("Examples"),
+		fmt.tprintf("    %s spotify-history-report ~/Downloads/spotify_data/", muted("$")),
+		fmt.tprintf("    %s spotify-history-report ./data --anthropic-key sk-ant-... -o report.html", muted("$")),
+		fmt.tprintf("    %s OPENAI_API_KEY=sk-... spotify-history-report ./data", muted("$")),
+		"",
+	)
 }
 
-show_cursor :: proc() {
-	fmt.printf("%s[?25h", ESC)
+step_line :: proc(n: int, title: string) -> string {
+	return fmt.tprintf("  %s %s", fgs(COL_ACCENT, fmt.tprintf("%d.", n), true), fgs(COL_BRIGHT, title, true))
 }
 
-draw_header :: proc() {
-	f8 := fg(NORD8)
-	f4 := fg(NORD4)
-	f3 := fg(NORD3)
-	defer { delete(f8); delete(f4); delete(f3) }
-
-	fmt.println()
-	fmt.printf("  %s%s▗▄▄▄▖%s\n", BOLD, f8, RESET)
-	fmt.printf("  %s%s▐   ▌%s  %s%sspotify-history-report%s\n", BOLD, f8, RESET, BOLD, f4, RESET)
-	fmt.printf("  %s%s▝▀▀▀▘%s  %s%sGenerate listening infographics from GDPR data%s\n", BOLD, f8, RESET, DIM, f3, RESET)
-	fmt.println()
-}
-
-draw_separator :: proc() {
-	f2 := fg(NORD3)
-	defer delete(f2)
-	line := strings.repeat("─", 68)
-	defer delete(line)
-	fmt.printf("  %s%s%s\n", f2, line, RESET)
-}
-
-draw_stat_card :: proc(label: string, value: string, color: Nord) {
-	fc := fg(color)
-	f3 := fg(NORD3)
-	defer { delete(fc); delete(f3) }
-	fmt.printf("  %s%s│%s %s%-24s%s %s%s%s%s\n", DIM, f3, RESET, DIM, label, RESET, BOLD, fc, value, RESET)
-}
-
-draw_progress_bar :: proc(label: string, current, total: int) {
-	f8 := fg(NORD8)
-	f4 := fg(NORD4)
-	defer { delete(f8); delete(f4) }
-
-	width := 40
-	pct := f64(current) / f64(max(total, 1))
-	filled := int(pct * f64(width))
-
-	bar := strings.builder_make()
-	defer strings.builder_destroy(&bar)
-	for i in 0..<width {
-		if i < filled {
-			strings.write_string(&bar, "█")
-		} else {
-			strings.write_string(&bar, "░")
-		}
+print_spotify_guide :: proc() {
+	code :: proc(k, v: string, last := false) -> string {
+		return fmt.tprintf("    %s%s %s%s", fgs(COL_ACCENT, k), muted(":"), v, "" if last else muted(","))
 	}
-
-	fmt.printf("\r  %s%s%s %s%s%s %3d%%  ",
-		DIM, label, RESET,
-		f8, strings.to_string(bar), RESET,
-		int(pct * 100))
-}
-
-draw_section_header :: proc(title: string) {
-	f9 := fg(NORD9)
-	defer delete(f9)
-	fmt.printf("\n  %s%s%s ─%s\n", BOLD, f9, title, RESET)
-}
-
-draw_list_item :: proc(rank: int, primary: string, secondary: string, meta: string, color: Nord) {
-	fc := fg(color)
-	f3 := fg(NORD3)
-	defer { delete(fc); delete(f3) }
-	fmt.printf("  %s%s%2d.%s %s%s%s%s  %s%s%s\n",
-		DIM, f3, rank, RESET,
-		BOLD, fc, primary, RESET,
-		DIM, meta, RESET)
-	if len(secondary) > 0 {
-		fmt.printf("      %s%s%s\n", DIM, secondary, RESET)
-	}
-}
-
-draw_mini_bar :: proc(label: string, value: f64, max_value: f64, color: Nord) {
-	fc := fg(color)
-	f4 := fg(NORD4)
-	defer { delete(fc); delete(f4) }
-
-	width := 30
-	filled := int((value / max(max_value, 0.01)) * f64(width))
-	filled = min(filled, width)
-
-	bar := strings.builder_make()
-	defer strings.builder_destroy(&bar)
-	for _ in 0..<filled {
-		strings.write_string(&bar, "▓")
-	}
-	for _ in 0..<(width - filled) {
-		strings.write_string(&bar, " ")
-	}
-
-	fmt.printf("  %s%-14s%s %s%s%s %.1f h\n",
-		f4, label, RESET,
-		fc, strings.to_string(bar), RESET,
-		value)
-}
-
-draw_done :: proc(path: string) {
-	f14 := fg(NORD14)
-	f4 := fg(NORD4)
-	defer { delete(f14); delete(f4) }
-	fmt.printf("\n  %s%s✓%s %sReport written to:%s\n", BOLD, f14, RESET, f4, RESET)
-	fmt.printf("    %s%s%s\n\n", DIM, path, RESET)
+	print_block(
+		"",
+		indent_block(logo_block(), 2),
+		"",
+		heading("How to get your Spotify data"),
+		"",
+		step_line(1, "Open the privacy page"),
+		fmt.tprintf("     %s", fgs(COL_ACCENT2, "https://www.spotify.com/account/privacy/")),
+		fmt.tprintf("     %s", muted("Log in, then scroll to “Download your data”.")),
+		"",
+		step_line(2, "Request your “Extended streaming history”"),
+		fmt.tprintf("     %s", muted("Not the basic “Account data” — you need the Extended version.")),
+		fmt.tprintf("     %s", muted("It includes every stream with timestamps and durations.")),
+		"",
+		step_line(3, "Wait for the email"),
+		fmt.tprintf("     %s %s", muted("Spotify prepares the export and emails a link"), fgs(COL_WARN, "(usually 5–30 days)")),
+		"",
+		step_line(4, "Download and unzip"),
+		fmt.tprintf("     %s %s %s", muted("You'll get files like"), fgs(COL_TEXT, "Streaming_History_Audio_2019-2024.json"), muted("")),
+		"",
+		step_line(5, "Point this tool at the folder"),
+		fmt.tprintf("     %s spotify-history-report ~/Downloads/my_spotify_data/", muted("$")),
+		"",
+		faint(strings.concatenate({"  ", repeat_str("─", 64)}, context.temp_allocator)),
+		"",
+		heading("What's in the data?"),
+		"",
+		"  Each JSON file is an array of streaming records:",
+		"",
+		fmt.tprintf("    %s", muted("{")),
+		code("\"ts\"", fgs(COL_OK, "\"2024-03-15T18:32:01Z\"")),
+		code("\"ms_played\"", fgs(COL_WARN, "234567")),
+		code("\"master_metadata_track_name\"", fgs(COL_OK, "\"Song Title\"")),
+		code("\"master_metadata_album_artist_name\"", fgs(COL_OK, "\"Artist\"")),
+		code("\"master_metadata_album_album_name\"", fgs(COL_OK, "\"Album\"")),
+		code("\"platform\"", fgs(COL_OK, "\"OS X 15.2.0\"")),
+		code("\"skipped\"", fgs(NORD15, "false"), true),
+		fmt.tprintf("    %s", muted("}")),
+		"",
+		fmt.tprintf("  A play is “qualifying” if %s (30 s)", fgs(COL_TEXT, "ms_played >= 30,000")),
+		"  and both track name and artist name are present.",
+		"",
+	)
 }
