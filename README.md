@@ -1,9 +1,9 @@
 <p align="center">
   <br>
-  <img src="https://img.shields.io/badge/lang-Odin-4a90d9?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9IiNmZmYiLz48L3N2Zz4=&logoColor=white" alt="Odin">
-  <img src="https://img.shields.io/badge/TUI-Nord%20Theme-88C0D0?style=for-the-badge" alt="Nord">
-  <img src="https://img.shields.io/badge/license-Blue%20Oak%201.0-5E81AC?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-A3BE8C?style=for-the-badge" alt="Platform">
+  <a href="https://odin-lang.org"><img src="https://img.shields.io/badge/lang-Odin-4a90d9?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9IiNmZmYiLz48L3N2Zz4=&logoColor=white" alt="Odin"></a>
+  <a href="#the-tui"><img src="https://img.shields.io/badge/TUI-Nord%20Theme-88C0D0?style=for-the-badge" alt="Nord"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Blue%20Oak%201.0-5E81AC?style=for-the-badge" alt="License"></a>
+  <a href="#2-build-the-tool"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-A3BE8C?style=for-the-badge" alt="Platform"></a>
   <br><br>
 </p>
 
@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/build-passing-A3BE8C?style=flat-square" alt="Build">
-  <img src="https://img.shields.io/badge/PRs-welcome-D08770?style=flat-square" alt="PRs">
-  <img src="https://img.shields.io/badge/data-stays%20local-BF616A?style=flat-square" alt="Local">
-  <img src="https://img.shields.io/badge/zero-dependencies-B48EAD?style=flat-square" alt="Deps">
+  <a href="#2-build-the-tool"><img src="https://img.shields.io/badge/build-passing-A3BE8C?style=flat-square" alt="Build"></a>
+  <a href="https://github.com/ParkWardRR/spotify-history-report/pulls"><img src="https://img.shields.io/badge/PRs-welcome-D08770?style=flat-square" alt="PRs"></a>
+  <a href="#privacy"><img src="https://img.shields.io/badge/data-stays%20local-BF616A?style=flat-square" alt="Local"></a>
+  <a href="#architecture"><img src="https://img.shields.io/badge/zero-dependencies-B48EAD?style=flat-square" alt="Deps"></a>
 </p>
 
 <p align="center">
