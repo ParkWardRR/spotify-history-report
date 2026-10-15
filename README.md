@@ -46,6 +46,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | **Session openers** | The songs you reach for first when you hit play |
 | **Top albums** | Best albums by total listening time |
 | **Never-skipped** | Songs with 15+ plays and zero skips — pure commitment |
+| **Genre evolution** | Stacked area chart of genre share over time (requires LLM) |
 | **Heatmap** | When you listen — day of week × hour of day |
 
 ## Quick start
@@ -67,10 +68,29 @@ odin build src/ -out:spotify-history-report -o:speed
 ### 3. Run it
 
 ```bash
-./spotify-history-report ~/Downloads/my_spotify_data/ report.html
+./spotify-history-report ~/Downloads/my_spotify_data/
 ```
 
-That's it. Open `report.html` in your browser.
+That's it. Open `spotify_report.html` in your browser.
+
+### 4. (Optional) Add genre classification
+
+The genre evolution chart requires an LLM to classify your artists. Provide an API key via environment variable, CLI flag, or config file:
+
+```bash
+# Environment variable (easiest)
+ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_data/
+
+# CLI flag
+./spotify-history-report ~/Downloads/my_spotify_data/ --anthropic-key sk-ant-...
+
+# Interactive config setup (saves to ~/.config/spotify-history-report/config.json)
+./spotify-history-report --setup
+```
+
+Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are cached in `.genre_cache.json` alongside your data so subsequent runs are instant.
+
+Skip genre classification entirely with `--no-llm`.
 
 ---
 
@@ -120,6 +140,7 @@ The tool shows a live terminal dashboard while it works, styled with the [Nord](
   │ Loyal artists            35 (8 years)
   │ Peak hour                18:00 (194h total)
   │ Most played              "Warm Static" (139×)
+  │ Genres mapped            3842 artists (2.3% Other)
 
   Top artists ─
 
@@ -141,11 +162,13 @@ The tool shows a live terminal dashboard while it works, styled with the [Nord](
 
 ```
 src/
-├── main.odin      entry point, arg parsing, TUI orchestration
+├── main.odin      entry point, CLI flags, guided setup, LLM orchestration
 ├── nord.odin      Nord palette constants (Polar Night → Aurora)
 ├── tui.odin       terminal rendering: progress bars, stat cards, mini charts
 ├── parser.odin    Spotify JSON deserialization, timestamp parsing (UTC→PST)
-├── stats.odin     all metric computation (sessions, streaks, heatmap, loyalty)
+├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
+├── config.odin    config file (~/.config), provider resolution, genre cache
+├── llm.odin       LLM genre classification (Anthropic/OpenAI/OpenRouter via curl)
 └── html.odin      HTML report generation (template embed + JSON injection)
 
 template/
@@ -169,13 +192,29 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 
 All timestamps are adjusted to Pacific time (UTC−8) before bucketing.
 
+## Genre classification
+
+When an LLM API key is available, the tool sends your unique artist names to the LLM in batches of 150 and asks it to classify each into one of 14 genres (Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other).
+
+Results are cached in `.genre_cache.json` next to your data files. The cache is additive — new artists from future exports get classified and merged in.
+
+The genre data powers a stacked area chart in the report showing how your listening taste evolved quarter by quarter.
+
+| Provider | Default model | How to get a key |
+|:---------|:--------------|:-----------------|
+| Anthropic | `claude-sonnet-4-20250514` | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
+| OpenAI | `gpt-4o-mini` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| OpenRouter | `anthropic/claude-sonnet-4-20250514` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+
+Priority: Anthropic > OpenAI > OpenRouter (auto-detected from env vars or config).
+
 ## LLM framework
 
 See [`FRAMEWORK.md`](FRAMEWORK.md) for a structured prompt framework if you want an LLM to help you extend or customize the report. It covers the full analysis pipeline: data specification, six analysis layers, visualization hierarchy, color system, and interactivity patterns.
 
 ## Privacy
 
-- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file.
+- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API (if configured) — and those only send artist names, not your listening history.
 - **The HTML report is self-contained.** No analytics, no external requests, no tracking pixels. Open it offline.
 - **The sample data uses fictional artists.** No real listening history is included in this repository.
 

@@ -285,6 +285,109 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	return stats
 }
 
+GENRE_ORDER_DEFAULT :: [?]string{
+	"Hip-hop & Rap", "Indie pop", "Funk & Soul", "Electronic",
+	"Rock", "R&B", "Jazz", "Latin", "Classical", "Pop",
+	"Country", "Metal", "World", "Other",
+}
+
+GENRE_COLORS_DEFAULT :: [?][2]string{
+	{"Hip-hop & Rap",  "#2a78d6"},
+	{"Indie pop",      "#eb6834"},
+	{"Funk & Soul",    "#1baf7a"},
+	{"Electronic",     "#eda100"},
+	{"Rock",           "#e87ba4"},
+	{"R&B",            "#008300"},
+	{"Jazz",           "#4a3aa7"},
+	{"Latin",          "#e34948"},
+	{"Classical",      "#5E81AC"},
+	{"Pop",            "#D08770"},
+	{"Country",        "#B48EAD"},
+	{"Metal",          "#BF616A"},
+	{"World",          "#A3BE8C"},
+	{"Other",          "#b8b7b2"},
+}
+
+compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]string) {
+	if len(genre_map) == 0 do return
+
+	// Genre order and colors
+	for g in GENRE_ORDER_DEFAULT {
+		append(&stats.genre_order, g)
+	}
+	for gc in GENRE_COLORS_DEFAULT {
+		stats.genre_colors[gc[0]] = gc[1]
+	}
+
+	// Count classified
+	classified := 0
+	total_ms: i64 = 0
+	other_ms: i64 = 0
+
+	for &p in plays {
+		total_ms += p.ms
+		if p.artist in genre_map {
+			classified += 1
+		} else {
+			other_ms += p.ms
+		}
+	}
+	stats.genre_classified = classified
+	stats.genre_other_pct = f64(other_ms) / f64(max(total_ms, 1)) * 100
+
+	// Genre share by quarter (exclude last year if incomplete)
+	quarter_genre_ms: map[string]map[string]i64
+	defer {
+		for _, &m in quarter_genre_ms { delete(m) }
+		delete(quarter_genre_ms)
+	}
+
+	max_year := 0
+	for &p in plays {
+		if p.year > max_year do max_year = p.year
+	}
+
+	for &p in plays {
+		if p.year >= max_year do continue  // skip incomplete year
+
+		q := fmt.aprintf("%d-Q%d", p.year, (p.month - 1) / 3 + 1)
+		genre := "Other"
+		if p.artist in genre_map {
+			genre = genre_map[p.artist]
+		}
+
+		if q not_in quarter_genre_ms {
+			quarter_genre_ms[q] = {}
+		}
+		(&quarter_genre_ms[q])[genre] += p.ms
+	}
+
+	// Sort quarters
+	q_keys: [dynamic]string
+	defer delete(q_keys)
+	for q in quarter_genre_ms {
+		append(&q_keys, q)
+	}
+	slice.sort_by(q_keys[:], proc(a, b: string) -> bool { return a < b })
+
+	for q in q_keys {
+		gm := quarter_genre_ms[q]
+		total_q: i64 = 0
+		for _, ms in gm { total_q += ms }
+
+		gq: Genre_Quarter
+		gq.quarter = q
+		gq.values = {}
+		for g in GENRE_ORDER_DEFAULT {
+			ms: i64 = 0
+			if g in gm { ms = gm[g] }
+			pct := f64(ms) / f64(max(total_q, 1)) * 100
+			gq.values[g] = pct
+		}
+		append(&stats.genre_area, gq)
+	}
+}
+
 estimate_gap_seconds :: proc(a, b: Play) -> i64 {
 	da := i64(a.year) * 366 * 86400 + i64(a.month) * 31 * 86400 + i64(a.day) * 86400 + i64(a.hour) * 3600 + i64(a.minute) * 60
 	db := i64(b.year) * 366 * 86400 + i64(b.month) * 31 * 86400 + i64(b.day) * 86400 + i64(b.hour) * 3600 + i64(b.minute) * 60

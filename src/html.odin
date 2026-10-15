@@ -128,6 +128,36 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 		if i > 0 do w(&j, ",")
 		wf(&j, "{\"day\":%d,\"hour\":%d,\"hours\":%.1f}", h.day, h.hour, h.hours)
 	}
+	w(&j, "],")
+
+	// Genre data
+	w(&j, "\"genre_order\":[")
+	for &g, i in s.genre_order {
+		if i > 0 do w(&j, ",")
+		wf(&j, "\"%s\"", esc(g))
+	}
+	w(&j, "],")
+
+	w(&j, "\"genre_colors\":{")
+	gi := 0
+	for g, c in s.genre_colors {
+		if gi > 0 do w(&j, ",")
+		wf(&j, "\"%s\":\"%s\"", esc(g), c)
+		gi += 1
+	}
+	w(&j, "},")
+
+	w(&j, "\"genre_area\":[")
+	for &gq, qi in s.genre_area {
+		if qi > 0 do w(&j, ",")
+		wf(&j, "{\"quarter\":\"%s\"", gq.quarter)
+		for &g in s.genre_order {
+			v: f64 = 0
+			if g in gq.values { v = gq.values[g] }
+			wf(&j, ",\"%s\":%.1f", esc(g), v)
+		}
+		w(&j, "}")
+	}
 	w(&j, "]")
 
 	w(&j, "}")

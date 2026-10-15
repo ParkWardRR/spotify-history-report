@@ -58,6 +58,17 @@ Stats :: struct {
 	longest_streak:   int,
 	heatmap:          [dynamic]JSON_HM,
 	explore_obsess:   [dynamic]JSON_Explore,
+	// Genre data (populated when LLM or cache available)
+	genre_area:       [dynamic]Genre_Quarter,
+	genre_order:      [dynamic]string,
+	genre_colors:     map[string]string,
+	genre_classified: int,
+	genre_other_pct:  f64,
+}
+
+Genre_Quarter :: struct {
+	quarter: string,
+	values:  map[string]f64,
 }
 
 Artist_Stat :: struct {
