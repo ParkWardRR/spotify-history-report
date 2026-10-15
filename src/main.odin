@@ -42,7 +42,6 @@ main :: proc() {
 	cli_provider := ""
 	cli_key := ""
 	cli_model := ""
-	skip_llm := false
 
 	i := 2
 	for i < len(args) {
@@ -58,8 +57,6 @@ main :: proc() {
 			if i + 1 < len(args) { i += 1; cli_key = args[i]; cli_provider = "openrouter" }
 		case a == "--model":
 			if i + 1 < len(args) { i += 1; cli_model = args[i] }
-		case a == "--no-llm":
-			skip_llm = true
 		case !strings.has_prefix(a, "-"):
 			output_path = a
 		}
@@ -154,76 +151,70 @@ main :: proc() {
 	stats := compute_stats(all_plays[:])
 	fmt.printf("  %sDone%s\n", f14, RESET)
 
+	// Require an LLM provider
+	if provider == .None {
+		f11 := fg(NORD11)
+		f3 := fg(NORD3)
+		defer { delete(f11); delete(f3) }
+		fmt.printf("\n  %s%s✗%s  No LLM API key found.\n", BOLD, f11, RESET)
+		fmt.printf("  %sRun %s--setup%s%s to configure one, or pass %s--anthropic-key%s%s / %s--openai-key%s%s / %s--openrouter-key%s%s.\n",
+			f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3)
+		fmt.printf("  %sYou can also set %sANTHROPIC_API_KEY%s%s, %sOPENAI_API_KEY%s%s, or %sOPENROUTER_API_KEY%s%s env vars.%s\n\n",
+			f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3, RESET)
+		return
+	}
+
 	// Genre classification via LLM
 	genre_map: map[string]string
 
-	if !skip_llm {
-		// Try loading cached genres
-		cached, has_cache := load_genre_cache(data_dir)
-		if has_cache && len(cached) > 0 {
-			genre_map = cached
-			f7 := fg(NORD7)
-			defer delete(f7)
-			fmt.printf("\n  %s%s✓%s Loaded %s%d%s cached genre classifications\n",
-				BOLD, f7, RESET, f7, len(genre_map), RESET)
-		}
+	cached, has_cache := load_genre_cache(data_dir)
+	if has_cache && len(cached) > 0 {
+		genre_map = cached
+		f7 := fg(NORD7)
+		defer delete(f7)
+		fmt.printf("\n  %s%s✓%s Loaded %s%d%s cached genre classifications\n",
+			BOLD, f7, RESET, f7, len(genre_map), RESET)
+	}
 
-		if provider != .None {
-			// Get unique artists sorted by play count
-			artist_list: [dynamic]string
-			defer delete(artist_list)
-			for &a in stats.top_artists {
-				append(&artist_list, a.name)
-			}
-			// Add remaining unique artists
-			artist_set: map[string]bool
-			defer delete(artist_set)
-			for &a in stats.top_artists { artist_set[a.name] = true }
-			for &p in all_plays {
-				if p.artist not_in artist_set {
-					artist_set[p.artist] = true
-					append(&artist_list, p.artist)
-				}
-			}
-
-			unclassified := 0
-			for &a in artist_list {
-				if a not_in genre_map do unclassified += 1
-			}
-
-			if unclassified > 0 {
-				draw_section_header("Genre classification")
-				f9 := fg(NORD9)
-				defer delete(f9)
-				fmt.printf("  %s%s%s → %s%d%s artists to classify via %s\n",
-					f9, provider_name(provider), RESET,
-					f14, unclassified, RESET,
-					model)
-				fmt.println()
-
-				genre_map = classify_artists_llm(
-					artist_list[:], provider, api_key, model, genre_map)
-
-				save_genre_cache(data_dir, genre_map)
-				fmt.printf("  %s✓%s Classified %s%d%s artists, cached to .genre_cache.json\n",
-					f14, RESET, f14, len(genre_map), RESET)
-			}
-		} else if !has_cache {
-			f13 := fg(NORD13)
-			f3 := fg(NORD3)
-			defer { delete(f13); delete(f3) }
-			fmt.printf("\n  %s%s⚠%s  No LLM configured — genre chart will be empty.\n", BOLD, f13, RESET)
-			fmt.printf("  %sRun %s--setup%s%s to configure an API key, or pass %s--openai-key%s%s / %s--anthropic-key%s%s / %s--openrouter-key%s%s.\n",
-				f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3)
-			fmt.printf("  %sYou can also set %sOPENAI_API_KEY%s%s, %sANTHROPIC_API_KEY%s%s, or %sOPENROUTER_API_KEY%s%s env vars.%s\n\n",
-				f3, BOLD, RESET, f3, BOLD, RESET, f3, BOLD, RESET, f3, RESET)
+	artist_list: [dynamic]string
+	defer delete(artist_list)
+	for &a in stats.top_artists {
+		append(&artist_list, a.name)
+	}
+	artist_set: map[string]bool
+	defer delete(artist_set)
+	for &a in stats.top_artists { artist_set[a.name] = true }
+	for &p in all_plays {
+		if p.artist not_in artist_set {
+			artist_set[p.artist] = true
+			append(&artist_list, p.artist)
 		}
 	}
 
-	// Compute genre stats if we have a genre map
-	if len(genre_map) > 0 {
-		compute_genre_stats(&stats, all_plays[:], genre_map)
+	unclassified := 0
+	for &a in artist_list {
+		if a not_in genre_map do unclassified += 1
 	}
+
+	if unclassified > 0 {
+		draw_section_header("Genre classification")
+		f9 := fg(NORD9)
+		defer delete(f9)
+		fmt.printf("  %s%s%s → %s%d%s artists to classify via %s\n",
+			f9, provider_name(provider), RESET,
+			f14, unclassified, RESET,
+			model)
+		fmt.println()
+
+		genre_map = classify_artists_llm(
+			artist_list[:], provider, api_key, model, genre_map)
+
+		save_genre_cache(data_dir, genre_map)
+		fmt.printf("  %s✓%s Classified %s%d%s artists, cached to .genre_cache.json\n",
+			f14, RESET, f14, len(genre_map), RESET)
+	}
+
+	compute_genre_stats(&stats, all_plays[:], genre_map)
 
 	// Dashboard
 	fmt.println()
@@ -240,9 +231,7 @@ main :: proc() {
 	draw_stat_card("Peak day",       stats.peak_day, NORD13)
 	draw_stat_card("Most played",    fmt.aprintf("\"%s\" (%dx)", stats.most_played_song.track, stats.most_played_song.plays), NORD12)
 
-	if len(genre_map) > 0 {
-		draw_stat_card("Genres mapped",  fmt.aprintf("%d artists (%.1f%% Other)", stats.genre_classified, stats.genre_other_pct), NORD7)
-	}
+	draw_stat_card("Genres mapped",  fmt.aprintf("%d artists (%.1f%% Other)", stats.genre_classified, stats.genre_other_pct), NORD7)
 
 	// Top artists
 	draw_section_header("Top artists")
@@ -327,7 +316,6 @@ print_usage :: proc() {
 	fmt.printf("    %s--anthropic-key <key>%s   Anthropic API key %s(Claude)%s\n", f4, RESET, f3, RESET)
 	fmt.printf("    %s--openrouter-key <key>%s  OpenRouter API key %s(any model)%s\n", f4, RESET, f3, RESET)
 	fmt.printf("    %s--model <model>%s         Override the LLM model\n", f4, RESET)
-	fmt.printf("    %s--no-llm%s                Skip LLM genre classification\n", f4, RESET)
 	fmt.printf("    %s--setup%s                 Interactive config setup %s(saves to ~/.config)%s\n", f4, RESET, f3, RESET)
 	fmt.printf("    %s--guide%s                 How to get your Spotify data export\n\n", f4, RESET)
 

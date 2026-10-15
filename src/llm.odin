@@ -75,14 +75,10 @@ Artists:
 
 	response := ""
 	switch provider {
-	case .OpenAI:
-		response = call_openai(api_key, model, prompt)
-	case .Anthropic:
-		response = call_anthropic(api_key, model, prompt)
-	case .OpenRouter:
-		response = call_openrouter(api_key, model, prompt)
-	case .None:
-		// no-op
+	case .OpenAI:     response = call_openai(api_key, model, prompt)
+	case .Anthropic:  response = call_anthropic(api_key, model, prompt)
+	case .OpenRouter: response = call_openrouter(api_key, model, prompt)
+	case .None: // unreachable
 	}
 
 	return parse_genre_response(response)
@@ -177,98 +173,49 @@ curl_post_anthropic :: proc(key: string, body: string) -> string {
 	return extract_anthropic_content(string(data))
 }
 
-// Extract "content" from OpenAI / OpenRouter chat completion response
 extract_openai_content :: proc(resp: string) -> string {
-	// Look for "content":" and extract the value
-	marker := "\"content\":\""
-	idx := strings.index(resp, marker)
-	if idx < 0 {
-		// Try content with space
-		marker = "\"content\": \""
-		idx = strings.index(resp, marker)
-		if idx < 0 do return ""
-	}
-	start := idx + len(marker)
-	// Find matching close quote (handle escaped quotes)
-	depth := 0
-	end := start
-	for end < len(resp) {
-		if resp[end] == '\\' {
-			end += 2
-			continue
-		}
-		if resp[end] == '"' && depth == 0 {
-			break
-		}
-		end += 1
-	}
-	if end > len(resp) do end = len(resp)
-
-	raw := resp[start:end]
-	// Unescape
-	b := strings.builder_make()
-	i := 0
-	for i < len(raw) {
-		if i + 1 < len(raw) && raw[i] == '\\' {
-			switch raw[i+1] {
-			case 'n': strings.write_rune(&b, '\n')
-			case 't': strings.write_rune(&b, '\t')
-			case '"': strings.write_rune(&b, '"')
-			case '\\': strings.write_rune(&b, '\\')
-			case: strings.write_byte(&b, raw[i+1])
-			}
-			i += 2
-		} else {
-			strings.write_byte(&b, raw[i])
-			i += 1
-		}
-	}
-	return strings.to_string(b)
+	return extract_json_string(resp, "\"content\"")
 }
 
-// Extract text from Anthropic messages response
 extract_anthropic_content :: proc(resp: string) -> string {
-	// Anthropic: {"content":[{"type":"text","text":"..."}]}
-	marker := "\"text\":\""
-	idx := strings.index(resp, marker)
-	if idx < 0 {
-		marker = "\"text\": \""
-		idx = strings.index(resp, marker)
-		if idx < 0 do return ""
-	}
-	start := idx + len(marker)
-	end := start
-	for end < len(resp) {
-		if resp[end] == '\\' {
-			end += 2
-			continue
-		}
-		if resp[end] == '"' {
-			break
-		}
-		end += 1
-	}
-	if end > len(resp) do end = len(resp)
+	return extract_json_string(resp, "\"text\"")
+}
 
-	raw := resp[start:end]
-	b := strings.builder_make()
-	i := 0
-	for i < len(raw) {
-		if i + 1 < len(raw) && raw[i] == '\\' {
-			switch raw[i+1] {
-			case 'n': strings.write_rune(&b, '\n')
-			case 't': strings.write_rune(&b, '\t')
-			case '"': strings.write_rune(&b, '"')
-			case '\\': strings.write_rune(&b, '\\')
-			case: strings.write_byte(&b, raw[i+1])
-			}
-			i += 2
-		} else {
-			strings.write_byte(&b, raw[i])
-			i += 1
+extract_json_string :: proc(resp: string, key: string) -> string {
+	for marker in ([2]string{fmt.aprintf("%s:\"", key), fmt.aprintf("%s: \"", key)}) {
+		idx := strings.index(resp, marker)
+		if idx < 0 do continue
+
+		start := idx + len(marker)
+		end := start
+		for end < len(resp) {
+			if resp[end] == '\\' { end += 2; continue }
+			if resp[end] == '"' do break
+			end += 1
 		}
+		if end > len(resp) do end = len(resp)
+
+		raw := resp[start:end]
+		b := strings.builder_make()
+		i := 0
+		for i < len(raw) {
+			if i + 1 < len(raw) && raw[i] == '\\' {
+				switch raw[i+1] {
+				case 'n':  strings.write_rune(&b, '\n')
+				case 't':  strings.write_rune(&b, '\t')
+				case '"':  strings.write_rune(&b, '"')
+				case '\\': strings.write_rune(&b, '\\')
+				case:      strings.write_byte(&b, raw[i+1])
+				}
+				i += 2
+			} else {
+				strings.write_byte(&b, raw[i])
+				i += 1
+			}
+		}
+		return strings.to_string(b)
 	}
-	return strings.to_string(b)
+	return ""
 }
 
 // Parse the LLM response (JSON object of artist -> genre)

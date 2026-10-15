@@ -73,9 +73,9 @@ odin build src/ -out:spotify-history-report -o:speed
 
 That's it. Open `spotify_report.html` in your browser.
 
-### 4. (Optional) Add genre classification
+### 4. Configure an LLM API key
 
-The genre evolution chart requires an LLM to classify your artists. Provide an API key via environment variable, CLI flag, or config file:
+Genre classification requires an LLM. Provide an API key via environment variable, CLI flag, or config file:
 
 ```bash
 # Environment variable (easiest)
@@ -89,8 +89,6 @@ ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_dat
 ```
 
 Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are cached in `.genre_cache.json` alongside your data so subsequent runs are instant.
-
-Skip genre classification entirely with `--no-llm`.
 
 ---
 
@@ -214,7 +212,7 @@ See [`FRAMEWORK.md`](FRAMEWORK.md) for a structured prompt framework if you want
 
 ## Privacy
 
-- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API (if configured) — and those only send artist names, not your listening history.
+- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API — and those only send artist names, not your listening history.
 - **The HTML report is self-contained.** No analytics, no external requests, no tracking pixels. Open it offline.
 - **The sample data uses fictional artists.** No real listening history is included in this repository.
 
