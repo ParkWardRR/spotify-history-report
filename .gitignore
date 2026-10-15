@@ -1,0 +1,6 @@
+spotify-history-report
+*.html
+!template/report.html
+*.o
+*.exe
+.DS_Store

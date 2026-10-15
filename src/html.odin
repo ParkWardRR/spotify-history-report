@@ -1,0 +1,148 @@
+package spotify_report
+
+import "core:os"
+import "core:fmt"
+import "core:strings"
+
+TEMPLATE :: string(#load("../template/report.html"))
+DATA_MARKER :: "/*DATA_PLACEHOLDER*/{}"
+
+generate_report :: proc(s: Stats, output_path: string) -> bool {
+	j := strings.builder_make()
+	defer strings.builder_destroy(&j)
+
+	w :: strings.write_string
+	wf :: proc(b: ^strings.Builder, f: string, args: ..any) {
+		strings.write_string(b, fmt.aprintf(f, ..args))
+	}
+
+	esc :: proc(s: string) -> string {
+		b := strings.builder_make()
+		for c in s {
+			switch c {
+			case '"':  strings.write_string(&b, "\\\"")
+			case '\\': strings.write_string(&b, "\\\\")
+			case '\n': strings.write_string(&b, "\\n")
+			case '\t': strings.write_string(&b, "\\t")
+			case:      strings.write_rune(&b, c)
+			}
+		}
+		return strings.to_string(b)
+	}
+
+	w(&j, "{")
+	wf(&j, "\"total_plays\":%d,", s.total_plays)
+	wf(&j, "\"total_hours\":%d,", s.total_hours)
+	wf(&j, "\"unique_artists\":%d,", s.unique_artists)
+	wf(&j, "\"unique_tracks\":%d,", s.unique_tracks)
+	wf(&j, "\"n_years\":%d,", s.n_years)
+	wf(&j, "\"date_range_start\":\"%s\",", s.date_range_start)
+	wf(&j, "\"date_range_end\":\"%s\",", s.date_range_end)
+	wf(&j, "\"longest_streak\":%d,", s.longest_streak)
+	wf(&j, "\"peak_hour\":%d,", s.peak_hour)
+	wf(&j, "\"peak_hour_val\":%d,", s.peak_hour_val)
+	wf(&j, "\"peak_day\":\"%s\",", s.peak_day)
+	wf(&j, "\"loyal_count\":%d,", s.loyal_count)
+	wf(&j, "\"genre_subtitle\":\"Quarterly share of listening time by genre.\",")
+	wf(&j, "\"heatmap_title\":\"When I listen\",")
+
+	last_yr := s.hours_by_year[len(s.hours_by_year)-1].year if len(s.hours_by_year) > 0 else 2026
+	wf(&j, "\"hours_subtitle\":\"%d in progress.\",", last_yr)
+
+	// Most played song
+	wf(&j, "\"most_played_song\":{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d},",
+		esc(s.most_played_song.track), esc(s.most_played_song.artist), s.most_played_song.plays)
+
+	// Biggest day
+	wf(&j, "\"biggest_day\":{\"date\":\"%s\",\"plays\":%d,\"hours\":%.1f},",
+		s.biggest_day.date, s.biggest_day.plays, s.biggest_day.hours)
+
+	// Hours by year
+	w(&j, "\"hours_by_year\":[")
+	for &yh, i in s.hours_by_year {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"year\":%d,\"hours\":%.1f}", yh.year, yh.hours)
+	}
+	w(&j, "],")
+
+	// Top artists
+	w(&j, "\"top_artists\":[")
+	for &a, i in s.top_artists {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"name\":\"%s\",\"hours\":%.1f}", esc(a.name), a.hours)
+	}
+	w(&j, "],")
+
+	// Top albums
+	w(&j, "\"top_albums\":[")
+	for &a, i in s.top_albums {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"album\":\"%s\",\"artist\":\"%s\",\"hours\":%.1f}", esc(a.album), esc(a.artist), a.hours)
+	}
+	w(&j, "],")
+
+	// Session openers
+	w(&j, "\"session_openers\":[")
+	for &o, i in s.session_openers {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"count\":%d}", esc(o.track), esc(o.artist), o.count)
+	}
+	w(&j, "],")
+
+	// Never skipped
+	w(&j, "\"never_skipped\":[")
+	for &ns, i in s.never_skipped {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}", esc(ns.track), esc(ns.artist), ns.plays)
+	}
+	w(&j, "],")
+
+	// Earworms
+	w(&j, "\"earworms\":[")
+	for &e, i in s.earworms {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}", esc(e.track), esc(e.artist), e.plays, e.period)
+	}
+	w(&j, "],")
+
+	// Loyalists
+	w(&j, "\"loyalists\":[")
+	for &l, i in s.loyalists {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"name\":\"%s\",\"hours\":%.1f}", esc(l.name), l.hours)
+	}
+	w(&j, "],")
+
+	// Explore/obsess
+	w(&j, "\"explore_obsess\":[")
+	for &e, i in s.explore_obsess {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"year\":%d,\"new_pct\":%d,\"top10_pct\":%d,\"rest_pct\":%d,\"new_count\":%d,\"total_artists\":%d}",
+			e.year, e.new_pct, e.top10_pct, e.rest_pct, e.new_count, e.total_artists)
+	}
+	w(&j, "],")
+
+	// Heatmap
+	w(&j, "\"heatmap\":[")
+	for &h, i in s.heatmap {
+		if i > 0 do w(&j, ",")
+		wf(&j, "{\"day\":%d,\"hour\":%d,\"hours\":%.1f}", h.day, h.hour, h.hours)
+	}
+	w(&j, "]")
+
+	w(&j, "}")
+
+	// Inject into template
+	tmpl := TEMPLATE
+	marker_pos := strings.index(tmpl, DATA_MARKER)
+	if marker_pos < 0 do return false
+
+	result := strings.builder_make()
+	defer strings.builder_destroy(&result)
+	strings.write_string(&result, tmpl[:marker_pos])
+	strings.write_string(&result, strings.to_string(j))
+	strings.write_string(&result, tmpl[marker_pos + len(DATA_MARKER):])
+
+	_ = os.write_entire_file(output_path, transmute([]u8)strings.to_string(result))
+	return true
+}
