@@ -425,46 +425,16 @@ test_record_with_bad_timestamp_is_reported :: proc(t: ^testing.T) {
 	testing.expect_value(t, status, Record_Status.Bad_Timestamp)
 }
 
-@(test)
-test_load_records_rejects_missing_empty_and_malformed :: proc(t: ^testing.T) {
-	_, ok := load_records("/nonexistent/nowhere.json")
-	testing.expect(t, !ok)
-
-	dir := os.temp_directory(context.temp_allocator) or_else "/tmp"
-	empty := fmt.tprintf("%s/shr_test_empty.json", dir)
-	bad := fmt.tprintf("%s/shr_test_bad.json", dir)
-	_ = os.write_entire_file(empty, transmute([]u8)string("[]"))
-	_ = os.write_entire_file(bad, transmute([]u8)string("[{\"ts\":"))
-	defer { os.remove(empty); os.remove(bad) }
-
-	recs, ok2 := load_records(empty)
-	testing.expect(t, ok2)
-	testing.expect_value(t, len(recs), 0)
-	_, ok3 := load_records(bad)
-	testing.expect(t, !ok3)
-}
-
 // ── End to end on the sample export ──────────────────────────────────────────
 
 SAMPLE_DIR :: #directory + "../sample"
 
 load_sample :: proc(c: ^Clock) -> (plays: [dynamic]Play, tally: Skip_Tally, bad: int) {
-	files := find_json_files(SAMPLE_DIR)
-	for path in files {
-		records, ok := load_records(path)
-		assert(ok)
-		for &rec in records {
-			p, status := record_to_play(rec, c)
-			#partial switch status {
-			case .Bad_Timestamp: bad += 1
-			case .Ok:
-				tally_record(&tally, p.year, play_key(p), is_skip(p))
-				if qualifies(p) do append(&plays, p)
-			}
-		}
-	}
-	sort_plays(plays[:])
-	return
+	scan := scan_inputs({SAMPLE_DIR})
+	assert(len(scan.err) == 0)
+	r, ok := load_plays(scan.entries[:], c, false)
+	assert(ok)
+	return r.plays, r.tally, r.summary.malformed
 }
 
 @(test)

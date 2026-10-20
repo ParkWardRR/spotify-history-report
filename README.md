@@ -62,6 +62,8 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 
 Go to [spotify.com/account/privacy](https://www.spotify.com/account/privacy/) and request your **Extended Streaming History**. Spotify sends it within a few days as a ZIP containing `Streaming_History_Audio_*.json` files.
 
+> **Which download?** Spotify offers two. The ordinary *Account data* package covers only about the last year and has no track IDs; this tool can't use it and will say so. *Extended streaming history* covers the account's whole lifetime. Both are described in [Spotify's data guide](https://support.spotify.com/us/article/understanding-your-data/).
+
 ### 2. Build the tool
 
 ```bash
@@ -77,10 +79,14 @@ odin build src/ -out:spotify-history-report -o:speed
 ### 3. Run it
 
 ```bash
-./spotify-history-report ~/Downloads/my_spotify_data/
+./spotify-history-report ~/Downloads/my_spotify_data.zip
 ```
 
 That's it. Open `spotify_report.html` in your browser.
+
+The input can be the **ZIP exactly as Spotify sent it**, a folder you extracted it to, or loose `.json` files; give several paths to combine them. Files are recognised by what is inside them, not by name, so renamed or re-zipped exports work and the other JSON in the package (playlists, searches) is ignored. ZIPs are read in memory: nothing is extracted to disk, names that try to escape a folder are never followed, and oversized or implausibly compressed entries are refused.
+
+The import line tells you what was found: files used and ignored, short listens, non-music rows (podcasts), identical files given twice, and rows repeated across overlapping exports. A repeat *inside* one file is kept, since it can be a real replay. Your `.shr/` notes (overrides, annotations) live in the folder you pointed at, or next to the ZIP.
 
 ### 4. Optional: fill in genres with an LLM
 

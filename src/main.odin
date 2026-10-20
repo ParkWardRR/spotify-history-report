@@ -27,16 +27,6 @@ main :: proc() {
 		case "--guide":
 			print_spotify_guide()
 			return
-		case "--plain":
-			force_plain = true
-		case "--identities":
-			identities_only = true
-		case "--scores":
-			scores_only = true
-		case "--annotations":
-			annotations_only = true
-		case "--enrich":
-			enrich_flag = true
 		}
 	}
 
@@ -45,20 +35,25 @@ main :: proc() {
 		return
 	}
 
-	opts := Run_Opts{data_dir = args[1], output_path = "spotify_report.html"}
+	opts := Run_Opts{output_path = "spotify_report.html"}
 
-	// Parse flags
 	cli_provider := ""
 	cli_key := ""
 	cli_model := ""
 	cli_timezone := ""
 	cli_decay := 0.0
 	decay_bad := false
+	inputs: [dynamic]string
 
-	i := 2
+	i := 1
 	for i < len(args) {
 		a := args[i]
 		switch {
+		case a == "--plain":        force_plain = true
+		case a == "--identities":   identities_only = true
+		case a == "--scores":       scores_only = true
+		case a == "--annotations":  annotations_only = true
+		case a == "--enrich":       enrich_flag = true
 		case a == "--output" || a == "-o":
 			if i + 1 < len(args) { i += 1; opts.output_path = args[i] }
 		case a == "--openai-key":
@@ -78,10 +73,20 @@ main :: proc() {
 		case a == "--timezone" || a == "--tz":
 			if i + 1 < len(args) { i += 1; cli_timezone = args[i] }
 		case !strings.has_prefix(a, "-"):
-			opts.output_path = a
+			// A trailing report.html is the output path (the old second argument).
+			if strings.has_suffix(strings.to_lower(a, context.temp_allocator), ".html") {
+				opts.output_path = a
+			} else {
+				append(&inputs, a)
+			}
 		}
 		i += 1
 	}
+	if len(inputs) == 0 {
+		print_usage()
+		return
+	}
+	opts.inputs = inputs[:]
 
 	// Load config
 	cfg := load_config()
@@ -161,18 +166,10 @@ run_tui :: proc(opts: Run_Opts) -> bool {
 }
 
 // `--identities`: no LLM, no report; just resolve identities and print them.
-run_identities :: proc(opts: Run_Opts) -> bool {
-	files := find_json_files(opts.data_dir)
-	if len(files) == 0 {
-		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
-		return false
-	}
-	clock := make_clock(opts.timezone)
-	loaded, ok := load_plays(files[:], &clock, false)
-	if !ok {
-		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
-		return false
-	}
+run_identities :: proc(opts_in: Run_Opts) -> bool {
+	opts := opts_in
+	loaded, ok := load_input(&opts, false)
+	if !ok do return false
 	ov, ov_err := load_overrides(opts.data_dir)
 	if len(ov_err) > 0 {
 		fmt.eprintfln("%s", ov_err)
@@ -192,18 +189,10 @@ run_identities :: proc(opts: Run_Opts) -> bool {
 
 // `--annotations`: genre coverage and the biggest gaps. No LLM; it imports a
 // legacy .genre_cache.json the first time so the numbers match a normal run.
-run_annotations :: proc(opts: Run_Opts) -> bool {
-	files := find_json_files(opts.data_dir)
-	if len(files) == 0 {
-		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
-		return false
-	}
-	clock := make_clock(opts.timezone)
-	loaded, ok := load_plays(files[:], &clock, false)
-	if !ok {
-		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
-		return false
-	}
+run_annotations :: proc(opts_in: Run_Opts) -> bool {
+	opts := opts_in
+	loaded, ok := load_input(&opts, false)
+	if !ok do return false
 	ov, ov_err := load_overrides(opts.data_dir)
 	if len(ov_err) > 0 {
 		fmt.eprintfln("%s", ov_err)
@@ -228,18 +217,10 @@ run_annotations :: proc(opts: Run_Opts) -> bool {
 
 // `--scores`: print the behaviour views and test the memory model against
 // simple baselines on this listener's own history.
-run_scores :: proc(opts: Run_Opts) -> bool {
-	files := find_json_files(opts.data_dir)
-	if len(files) == 0 {
-		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
-		return false
-	}
-	clock := make_clock(opts.timezone)
-	loaded, ok := load_plays(files[:], &clock, false)
-	if !ok {
-		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
-		return false
-	}
+run_scores :: proc(opts_in: Run_Opts) -> bool {
+	opts := opts_in
+	loaded, ok := load_input(&opts, false)
+	if !ok do return false
 	// Overrides apply here too, so the scores match the report.
 	ov, ov_err := load_overrides(opts.data_dir)
 	if len(ov_err) > 0 {
@@ -261,4 +242,22 @@ run_plain :: proc(opts: Run_Opts) {
 	run_pipeline(opts)
 	fmt.println()
 	if plain_failed do os.exit(1)
+}
+
+// Scans and reads the input for the sub-commands that don't run the pipeline,
+// printing a plain-language error if it can't be used. Fills `opts.data_dir`.
+load_input :: proc(opts: ^Run_Opts, progress: bool) -> (Load_Result, bool) {
+	scan := scan_inputs(opts.inputs)
+	if len(scan.err) > 0 {
+		fmt.eprintfln("%s\n%s", scan.err, scan.hint)
+		return {}, false
+	}
+	opts.data_dir = scan.sidecar_dir
+	clock := make_clock(opts.timezone)
+	loaded, ok := load_plays(scan.entries[:], &clock, progress)
+	if !ok {
+		fmt.eprintfln("%s\n%s", loaded.err, loaded.hint)
+		return loaded, false
+	}
+	return loaded, true
 }

@@ -106,6 +106,7 @@ Stats :: struct {
 	scores:             Scores,
 	identity:           Identity_Summary,
 	identity_candidates: [dynamic]Candidate, // top review candidates, most-played first
+	import_summary:     Import_Summary,
 }
 
 Genre_Quarter :: struct {
@@ -251,40 +252,4 @@ is_skip :: proc(p: Play) -> bool {
 // Chronological order; ties keep file order so output is reproducible.
 sort_plays :: proc(plays: []Play) {
 	slice.stable_sort_by(plays, proc(a, b: Play) -> bool { return a.unix < b.unix })
-}
-
-find_json_files :: proc(dir: string) -> [dynamic]string {
-	files: [dynamic]string
-
-	dh, err := os.open(dir)
-	if err != nil do return files
-	defer os.close(dh)
-
-	entries, read_err := os.read_dir(dh, -1, context.allocator)
-	if read_err != nil do return files
-
-	for entry in entries {
-		if strings.has_prefix(entry.name, "Streaming_History_Audio_") && strings.has_suffix(entry.name, ".json") {
-			p, _ := filepath.join({dir, entry.name}, context.allocator)
-			append(&files, p)
-		}
-	}
-
-	slice.sort_by(files[:], proc(a, b: string) -> bool {
-		return a < b
-	})
-
-	return files
-}
-
-load_records :: proc(path: string) -> ([dynamic]Streaming_Record, bool) {
-	data, read_err := os.read_entire_file(path, context.allocator)
-	if read_err != nil do return {}, false
-
-	records: [dynamic]Streaming_Record
-	json_err := json.unmarshal(data, &records)
-	if json_err != nil do return {}, false
-	delete(data)
-
-	return records, true
 }

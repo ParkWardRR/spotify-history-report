@@ -42,6 +42,30 @@ ANTHROPIC_API_KEY=sk-ant-invalid HOME="$WORK/home" "$BIN" "$WORK/bare" --plain -
 grep -q "enrichment off" "$WORK/bare2.log" \
 	|| { echo "smoke: FAIL: a key alone enabled enrichment" >&2; exit 1; }
 
+# The ZIP as Spotify sends it (deflate, nested folder, a PDF and macOS noise) must give the same report as the folder.
+mkdir "$WORK/pkg" "$WORK/zipdir"
+python3 -I - "$ROOT" "$WORK/zipdir/my_spotify_data.zip" <<'PY'
+import glob, sys, zipfile
+root, out = sys.argv[1:3]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for f in sorted(glob.glob(f"{root}/sample/Streaming_History_Audio_*.json")):
+        z.write(f, "Spotify Extended Streaming History/" + f.rsplit("/", 1)[1])
+    z.writestr("Spotify Extended Streaming History/ReadMeFirst.pdf", b"%PDF-1.4 not json")
+    z.writestr("Spotify Extended Streaming History/Playlist1.json", '{"playlists": []}')
+    z.writestr("__MACOSX/Spotify Extended Streaming History/._Streaming_History_Audio_2020-2024.json", b"\0\0junk")
+PY
+env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/home" "$BIN" "$WORK/zipdir/my_spotify_data.zip" --plain --timezone America/Los_Angeles -o "$WORK/z.html" >"$WORK/z.log" 2>&1 \
+	|| { cat "$WORK/z.log"; echo "smoke: FAIL: ZIP input" >&2; exit 1; }
+grep -q "1 other JSON file ignored" "$WORK/z.log" || { cat "$WORK/z.log"; echo "smoke: FAIL: ZIP import notes missing" >&2; exit 1; }
+[ ! -e "$WORK/zipdir/Spotify Extended Streaming History" ] || { echo "smoke: FAIL: ZIP was extracted to disk" >&2; exit 1; }
+env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/home" "$BIN" "$WORK/bare" --plain --timezone America/Los_Angeles -o "$WORK/f.html" >/dev/null 2>&1
+cmp -s "$WORK/z.html" "$WORK/f.html" || { echo "smoke: FAIL: ZIP and folder give different reports" >&2; exit 1; }
+
+# A non-history input fails with a plain message and a non-zero exit.
+echo '{"x":1}' > "$WORK/Other.json"
+if "$BIN" "$WORK/Other.json" --plain -o "$WORK/no.html" >"$WORK/no.log" 2>&1; then echo "smoke: FAIL: non-history input accepted" >&2; exit 1; fi
+grep -q "None of the JSON files" "$WORK/no.log" || { cat "$WORK/no.log"; echo "smoke: FAIL: no explanation for non-history input" >&2; exit 1; }
+
 fail() { echo "smoke: FAIL: $*" >&2; exit 1; }
 
 grep -q "Report ready" "$WORK/a.log" || fail "pipeline did not finish"
