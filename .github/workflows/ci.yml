@@ -41,3 +41,19 @@ jobs:
 
       - name: Smoke test on the sample export
         run: scripts/smoke.sh ./spotify-history-report
+
+      - name: Install Go
+        env:
+          GO_VERSION: "1.24.0"
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar xz -C /opt
+          echo /opt/go/bin >> "$GITHUB_PATH"
+
+      - name: Test the Go tools
+        run: |
+          set -euo pipefail
+          for d in tools/*/; do
+            echo "== $d"
+            (cd "$d" && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...)
+          done
