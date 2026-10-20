@@ -60,6 +60,7 @@ Run_Opts :: struct {
 	model:       string,
 	timezone:    string, // IANA name; empty means the default
 	decay:       f64,    // memory decay for the behaviour scores; 0 means the default
+	noindex:     bool,   // inject robots noindex/nofollow meta tags into the report
 }
 
 emit: proc(msg: Msg) = proc(msg: Msg) {}
@@ -252,7 +253,7 @@ run_pipeline :: proc(o: Run_Opts) {
 
 	// ── Report ──
 	stage_msg(.Report, .Active, o.output_path)
-	if !generate_report(stats^, o.output_path) {
+	if !generate_report(stats^, o.output_path, o.noindex) {
 		fail(.Report, fmt.aprintf("Failed to write %s", o.output_path), "Check that the output directory exists and is writable.")
 		return
 	}

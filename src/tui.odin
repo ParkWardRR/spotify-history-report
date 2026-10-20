@@ -43,6 +43,7 @@ print_usage :: proc() {
 		opt_line("--scores", "Print favourites/obsessions/rediscoveries and test the model on your replays"),
 		opt_line("--annotations", "Print genre coverage and the biggest unclassified artists, then exit"),
 		opt_line("--identities", "Print the track-identity report (coverage, duplicates) and exit"),
+		opt_line("--noindex", "Add robots noindex/nofollow meta tags to the report"),
 		opt_line("--plain", "No TUI; print progress as plain lines"),
 		opt_line("--setup", "Interactive config setup", "(saves to ~/.config)"),
 		opt_line("--guide", "How to get your Spotify data export"),

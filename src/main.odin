@@ -74,6 +74,8 @@ main :: proc() {
 			}
 		case a == "--timezone" || a == "--tz":
 			if i + 1 < len(args) { i += 1; cli_timezone = args[i] }
+		case a == "--noindex":
+			opts.noindex = true
 		case !strings.has_prefix(a, "-"):
 			opts.output_path = a
 		}
