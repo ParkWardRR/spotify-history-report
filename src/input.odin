@@ -283,6 +283,7 @@ read_input :: proc(e: Input_Entry) -> (data: []u8, err: string) {
 File_Kind :: enum {
 	Streaming_History, // Extended Streaming History (ts, ms_played, …)
 	Account_History,   // the one-year StreamingHistory*.json (endTime, msPlayed, …)
+	Technical_Log,     // a Technical Log Information event file (message_* fields)
 	Other,             // some other JSON in the package, or not an array at all
 	Damaged,           // looks like streaming history but is not valid JSON
 }
@@ -294,6 +295,8 @@ classify_file :: proc(name: string, data: []u8) -> (kind: File_Kind, records: [d
 	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF do i = 3
 	for i < len(data) && (data[i] == ' ' || data[i] == '\n' || data[i] == '\r' || data[i] == '\t') do i += 1
 	if i >= len(data) || data[i] != '[' do return .Other, nil
+
+	if looks_like_technical_log(data[i:]) do return .Technical_Log, nil
 
 	looks_named := strings.has_prefix(filepath.base(name), "Streaming_History_") ||
 		strings.contains(filepath.base(name), "StreamingHistory")

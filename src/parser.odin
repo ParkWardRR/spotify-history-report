@@ -107,6 +107,7 @@ Stats :: struct {
 	// Genre data (populated when LLM or cache available)
 	genre_area:         [dynamic]Genre_Quarter,
 	genre_artists:      [dynamic]Genre_Artists, // biggest genres, each with its top artists
+	tech:               Tech_Stats, // from a Technical Log package; present=false without one
 	genre_order:        [dynamic]string,
 	genre_colors:       map[string]string,
 	genre_classified:   int,

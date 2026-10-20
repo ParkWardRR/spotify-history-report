@@ -89,12 +89,14 @@ Import_Summary :: struct {
 	music_events:     int,    // rows with a track and artist, after the above
 	short_listens:    int,    // music events under 30 s (not plays)
 	plays:            int,    // qualifying plays (30 s or more)
+	techlog_files:    int,    // Technical Log event files that contributed (routes, bitrate, daylists)
 	excluded:         int,    // music rows dropped by exclude_artists
 	exclusions_unmatched: [dynamic]string, // exclude_artists names that matched no row
 }
 
 Load_Result :: struct {
 	plays:   [dynamic]Play,
+	techlog: Tech_Raw, // from a Technical Log package, when one was given
 	tally:   Skip_Tally,
 	summary: Import_Summary,
 	err:     string, // set when the input is unusable
@@ -128,6 +130,15 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 		}
 		fp := file_fingerprint(data)
 		kind, records := classify_file(e.name, data)
+		if kind == .Technical_Log {
+			// Only the three listening-context event types are read; see techlog.odin.
+			if fp not_in seen_files {
+				seen_files[fp] = true
+				if techlog_ingest(&r.techlog, data) do r.summary.techlog_files += 1
+			}
+			delete(data)
+			continue
+		}
 		delete(data)
 
 		switch kind {
@@ -141,6 +152,7 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 			r.err = fmt.aprintf("%s is not valid JSON", e.name)
 			r.hint = "The file looks truncated. Download the export again."
 			return r, false
+		case .Technical_Log: // handled above, before the switch
 		case .Streaming_History:
 		}
 		if fp in seen_files {
@@ -321,6 +333,7 @@ run_pipeline :: proc(o: Run_Opts) {
 	stats^ = compute_stats(all_plays[:], tally)
 	stats.timezone = clock_label(clock)
 	stats.import_summary = loaded.summary
+	stats.tech = techlog_stats(&loaded.techlog)
 	stats.scores = compute_scores(all_plays[:], o.decay if o.decay > 0 else DEFAULT_DECAY)
 	stats.identity = table.summary
 	for c, i in table.candidates {
@@ -467,6 +480,7 @@ exclusion_note :: proc(s: Import_Summary) -> string {
 import_notes_text :: proc(s: Import_Summary) -> string {
 	parts: [dynamic]string
 	if note := exclusion_note(s); len(note) > 0 do append(&parts, note)
+	if s.techlog_files > 0 do append(&parts, fmt.aprintf("%d Technical Log file%s read", s.techlog_files, "" if s.techlog_files == 1 else "s"))
 	if s.short_listens > 0 do append(&parts, fmt.aprintf("%s short listens", fmt_int(s.short_listens)))
 	if s.non_music > 0 do append(&parts, fmt.aprintf("%s non-music rows skipped", fmt_int(s.non_music)))
 	if s.overlap_dropped > 0 do append(&parts, fmt.aprintf("%s rows repeated across files dropped", fmt_int(s.overlap_dropped)))

@@ -64,6 +64,12 @@ Go to [spotify.com/account/privacy](https://www.spotify.com/account/privacy/) an
 
 > **Which download?** Spotify offers two. The ordinary *Account data* package covers only about the last year and has no track IDs; this tool can't use it and will say so. *Extended streaming history* covers the account's whole lifetime. Both are described in [Spotify's data guide](https://support.spotify.com/us/article/understanding-your-data/).
 
+**Optional: the Technical Log.** The same page also offers *Technical log information*, a separate package of event logs for the current account. Pass it as an extra path and the report gains a **Technical log insights** section: where the sound went (built-in speakers, Bluetooth, car, AirPlay), which stream bitrates were chosen, and your daylists (the words in their titles, the most recent titles, and when they were generated). Only three of its event files are read (`AudioRouteSegmentEnd`, `AudioFileSelection`, `DaylistGenerated`); the rest is never parsed. It spans a shorter period than the streaming history and the section says so. Device names are not shown. Without the package the section is simply absent.
+
+```bash
+./spotify-history-report "Spotify Extended Streaming History" "Spotify Technical Log Information"
+```
+
 ### 2. Build the tool
 
 ```bash
@@ -84,7 +90,7 @@ odin build src/ -out:spotify-history-report -o:speed
 
 That's it. Open `spotify_report.html` in your browser.
 
-The input can be the **ZIP exactly as Spotify sent it**, a folder you extracted it to, or loose `.json` files; give several paths to combine them. Files are recognised by what is inside them, not by name, so renamed or re-zipped exports work and the other JSON in the package (playlists, searches) is ignored. ZIPs are read in memory: nothing is extracted to disk, names that try to escape a folder are never followed, and oversized or implausibly compressed entries are refused.
+The input can be the **ZIP exactly as Spotify sent it**, a folder you extracted it to, or loose `.json` files; give several paths to combine them. Files are recognised by what is inside them, not by name, so renamed or re-zipped exports work and the other JSON in the package (playlists, searches) is ignored; Technical Log event files are recognised the same way and only the three useful ones are read. ZIPs are read in memory: nothing is extracted to disk, names that try to escape a folder are never followed, and oversized or implausibly compressed entries are refused.
 
 The import line tells you what was found: files used and ignored, short listens, non-music rows (podcasts), identical files given twice, and rows repeated across overlapping exports. A repeat *inside* one file is kept, since it can be a real replay. Your `.shr/` notes (overrides, annotations) live in the folder you pointed at, or next to the ZIP.
 
@@ -178,6 +184,7 @@ src/
 ├── calendar.odin  timestamps → local time (named timezone, true day ordinals)
 ├── identity.odin  track identity: URI resolution, duplicate candidates, overrides
 ├── annotations.odin  genre annotations: store, migration, precedence, coverage
+├── techlog.odin   Technical Log reader: audio routes, stream bitrate, daylists
 ├── scores.odin    ACT-R activation, favourites/obsessions/rediscoveries, held-out evaluation
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache

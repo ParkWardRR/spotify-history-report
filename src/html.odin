@@ -102,6 +102,7 @@ report_json :: proc(s: Stats) -> string {
 	} else {
 		w(&j, "\"hours_subtitle\":\"\",")
 	}
+	if s.tech.present do write_tech_json(&j, s.tech)
 	wf(&j, "\"timezone\":\"%s\",", esc(s.timezone))
 	w(&j, "\"identity\":")
 	summary_json(&j, s.identity)
@@ -276,6 +277,39 @@ report_json :: proc(s: Stats) -> string {
 
 	w(&j, "}")
 	return strings.to_string(j)
+}
+
+// The Technical Log section: only written when that package was given.
+write_tech_json :: proc(j: ^strings.Builder, t: Tech_Stats) {
+	w :: strings.write_string
+	wf :: proc(b: ^strings.Builder, f: string, args: ..any) {
+		strings.write_string(b, fmt.aprintf(f, ..args))
+	}
+	esc :: json_html_safe
+
+	items :: proc(j: ^strings.Builder, key: string, list: []Count_Item) {
+		strings.write_string(j, fmt.aprintf("\"%s\":[", key))
+		for it, i in list {
+			if i > 0 do strings.write_string(j, ",")
+			strings.write_string(j, fmt.aprintf("{{\"label\":\"%s\",\"count\":%d}}", json_html_safe(it.label), it.count))
+		}
+		strings.write_string(j, "]")
+	}
+	w(j, "\"techlog\":{")
+	wf(j, "\"first\":\"%s\",\"last\":\"%s\",\"route_total\":%d,\"bitrate_total\":%d,\"daylists\":%d,",
+		esc(t.first_date), esc(t.last_date), t.route_total, t.bitrate_total, t.daylists)
+	items(j, "routes", t.routes[:]); w(j, ",")
+	items(j, "bitrates", t.bitrates[:]); w(j, ",")
+	items(j, "terms", t.terms[:]); w(j, ",")
+	w(j, "\"titles\":[")
+	for title, i in t.titles {
+		if i > 0 do w(j, ",")
+		wf(j, "\"%s\"", esc(title))
+	}
+	w(j, "],")
+	wf(j, "\"dayparts\":[%d,%d,%d,%d],", t.dayparts[0], t.dayparts[1], t.dayparts[2], t.dayparts[3])
+	wf(j, "\"weekdays\":[%d,%d,%d,%d,%d,%d,%d]", t.weekdays[0], t.weekdays[1], t.weekdays[2], t.weekdays[3], t.weekdays[4], t.weekdays[5], t.weekdays[6])
+	w(j, "},")
 }
 
 NOINDEX_ANCHOR :: `<meta charset="utf-8">`
