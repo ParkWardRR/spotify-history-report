@@ -155,6 +155,10 @@ Colors are the [Nord](https://www.nordtheme.com/) palette. In terminals with tru
 
 When stdout isn't a terminal (or with `--plain`) it prints simple progress lines instead.
 
+### Hosting a report
+
+The report is one self-contained HTML file with responsive layouts down to phone widths. If you put it on a public site and don't want it in search results, add `--noindex`: it inserts `robots` (`noindex, nofollow, noarchive`) and `googlebot` meta tags. This is a request to well-behaved crawlers, not access control; anything private still needs real authentication.
+
 ## Architecture
 
 ```
@@ -274,7 +278,17 @@ This also writes `.shr/identities.json` next to your data (a derived cache; safe
 }
 ```
 
-A reference is either a `uri` (exactly that URI) or both `artist` and `title` (every URI carrying that text; as the `into` side it stands for the most-played of them and pulls the others in). Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
+A reference is either a `uri` (exactly that URI) or both `artist` and `title` (every URI carrying that text; as the `into` side it stands for the most-played of them and pulls the others in). Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored.
+
+**Shared account?** List the artists that belong to someone else and every play, short listen and skip by them is dropped before anything is computed, so they never reach the report, the identity table or the scores:
+
+```json
+{ "exclude_artists": ["Artist A", "Artist B"] }
+```
+
+Names are exact and case-sensitive. The import line says how many rows were removed, and names that matched nothing (usually a typo) are listed. Remove the entry to get the data back; the export is never modified.
+
+MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 
 ## Genre classification
 
@@ -284,7 +298,7 @@ Genres are **annotations**, not a lookup table. Each one records what was claime
 |:------|:--------|
 | `artist`, `title` | What it is about. An empty `title` means the whole artist; a title means just that track |
 | `namespace`, `value` | `genre` today (one of the 14 labels below); `mood`, `era`, `language`, … are accepted and kept for later |
-| `source`, `model` | `user`, `musicbrainz`, `sidecar` or `llm`, and the model id for model-made ones |
+| `source`, `model` | `user`, `musicbrainz`, `sidecar`, `lastfm` or `llm` (in that order of precedence), and the model id for model-made ones |
 | `confidence`, `observed` | A score where the source has a calibrated one (else `null`), and the date |
 
 Three rules keep it honest:

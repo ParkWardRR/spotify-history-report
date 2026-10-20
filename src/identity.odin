@@ -397,6 +397,10 @@ Overrides :: struct {
 	merges:        [dynamic]Merge_Override,
 	keep_separate: [dynamic]Separate_Override,
 	annotations:   [dynamic]User_Annotation,
+	// Every play by these artists is dropped before anything is computed (for a
+	// shared account where some listening belongs to someone else). Exact,
+	// case-sensitive names, like the rest of the overrides.
+	exclude_artists: [dynamic]string,
 }
 
 // Reads `.shr/overrides.json`. A missing file is fine (nothing overridden); a
@@ -414,7 +418,7 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 	val, perr := json.parse(data, allocator = context.temp_allocator)
 	if perr != nil do return {}, fmt.aprintf("%s is not valid JSON (%v)", label, perr)
 
-	if e := check_keys(val, {"version", "merges", "keep_separate", "annotations"}, label); len(e) > 0 do return {}, e
+	if e := check_keys(val, {"version", "merges", "keep_separate", "annotations", "exclude_artists"}, label); len(e) > 0 do return {}, e
 	root := val.(json.Object)
 
 	check_list :: proc(root: json.Object, field: string, pair: [2]string, label: string) -> string {
@@ -443,6 +447,17 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 		for item, i in arr {
 			where_ := fmt.aprintf("%s: annotations[%d]", label, i)
 			if e := check_keys(item, {"artist", "title", "namespace", "value"}, where_); len(e) > 0 do return {}, e
+		}
+	}
+
+	if raw, present := root["exclude_artists"]; present {
+		arr, is_arr := raw.(json.Array)
+		if !is_arr do return {}, fmt.aprintf("%s: \"exclude_artists\" must be a list of artist names", label)
+		for item, i in arr {
+			name, is_str := item.(json.String)
+			if !is_str || len(name) == 0 {
+				return {}, fmt.aprintf("%s: exclude_artists[%d] must be a non-empty artist name", label, i)
+			}
 		}
 	}
 

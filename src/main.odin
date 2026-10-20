@@ -170,13 +170,8 @@ run_tui :: proc(opts: Run_Opts) -> bool {
 // `--identities`: no LLM, no report; just resolve identities and print them.
 run_identities :: proc(opts_in: Run_Opts) -> bool {
 	opts := opts_in
-	loaded, ok := load_input(&opts, false)
+	loaded, ov, ok := load_input(&opts, false)
 	if !ok do return false
-	ov, ov_err := load_overrides(opts.data_dir)
-	if len(ov_err) > 0 {
-		fmt.eprintfln("%s", ov_err)
-		return false
-	}
 	table, err := resolve_identities(loaded.plays[:], ov, &loaded.tally)
 	if len(err) > 0 {
 		fmt.eprintfln("overrides.json: %s", err)
@@ -193,13 +188,8 @@ run_identities :: proc(opts_in: Run_Opts) -> bool {
 // legacy .genre_cache.json the first time so the numbers match a normal run.
 run_annotations :: proc(opts_in: Run_Opts) -> bool {
 	opts := opts_in
-	loaded, ok := load_input(&opts, false)
+	loaded, ov, ok := load_input(&opts, false)
 	if !ok do return false
-	ov, ov_err := load_overrides(opts.data_dir)
-	if len(ov_err) > 0 {
-		fmt.eprintfln("%s", ov_err)
-		return false
-	}
 	if _, err := resolve_identities(loaded.plays[:], ov, &loaded.tally); len(err) > 0 {
 		fmt.eprintfln("overrides.json: %s", err)
 		return false
@@ -221,14 +211,9 @@ run_annotations :: proc(opts_in: Run_Opts) -> bool {
 // simple baselines on this listener's own history.
 run_scores :: proc(opts_in: Run_Opts) -> bool {
 	opts := opts_in
-	loaded, ok := load_input(&opts, false)
-	if !ok do return false
 	// Overrides apply here too, so the scores match the report.
-	ov, ov_err := load_overrides(opts.data_dir)
-	if len(ov_err) > 0 {
-		fmt.eprintfln("%s", ov_err)
-		return false
-	}
+	loaded, ov, ok := load_input(&opts, false)
+	if !ok do return false
 	if _, err := resolve_identities(loaded.plays[:], ov, &loaded.tally); len(err) > 0 {
 		fmt.eprintfln("overrides.json: %s", err)
 		return false
@@ -247,19 +232,26 @@ run_plain :: proc(opts: Run_Opts) {
 }
 
 // Scans and reads the input for the sub-commands that don't run the pipeline,
-// printing a plain-language error if it can't be used. Fills `opts.data_dir`.
-load_input :: proc(opts: ^Run_Opts, progress: bool) -> (Load_Result, bool) {
+// printing a plain-language error if it can't be used. Fills `opts.data_dir` and returns the overrides, which have already been applied to what was loaded.
+load_input :: proc(opts: ^Run_Opts, progress: bool) -> (Load_Result, Overrides, bool) {
 	scan := scan_inputs(opts.inputs)
 	if len(scan.err) > 0 {
 		fmt.eprintfln("%s\n%s", scan.err, scan.hint)
-		return {}, false
+		return {}, {}, false
 	}
 	opts.data_dir = scan.sidecar_dir
+	// Read first: exclude_artists decides which rows are loaded at all.
+	ov, ov_err := load_overrides(opts.data_dir)
+	if len(ov_err) > 0 {
+		fmt.eprintfln("%s", ov_err)
+		return {}, {}, false
+	}
 	clock := make_clock(opts.timezone)
-	loaded, ok := load_plays(scan.entries[:], &clock, progress)
+	loaded, ok := load_plays(scan.entries[:], &clock, progress, ov.exclude_artists[:])
 	if !ok {
 		fmt.eprintfln("%s\n%s", loaded.err, loaded.hint)
-		return loaded, false
+		return loaded, ov, false
 	}
-	return loaded, true
+	if note := exclusion_note(loaded.summary); len(note) > 0 do fmt.eprintfln("note: %s", note)
+	return loaded, ov, true
 }
