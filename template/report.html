@@ -38,6 +38,7 @@
     max-width: 800px;
     margin: 0 auto;
     padding: 48px 32px 64px;
+    overflow-x: hidden;
   }
 
   h1 {
@@ -279,6 +280,8 @@
   }
   #explore-chart svg {
     display: block;
+    width: 100%;
+    height: auto;
   }
 
   /* Discovery section */
@@ -515,6 +518,37 @@
     .page { padding: 24px 16px 48px; }
     h1 { font-size: 28px; }
     .stat-value { font-size: 32px; }
+    .discovery-stats { grid-template-columns: repeat(2, 1fr); }
+    .loyal-grid { grid-template-columns: repeat(2, 1fr); }
+    .earworm-grid { grid-template-columns: 1fr; }
+    .artist-name { width: 100px; }
+    .heatmap { gap: 1px; }
+    .heatmap-label { font-size: 9px; width: 24px; }
+    .heatmap { grid-template-columns: 24px repeat(24, 1fr); }
+    .heatmap-cell { min-height: 8px; }
+    .heatmap-hour { font-size: 8px; }
+    .section { padding: 20px 16px; }
+  }
+  @media (max-width: 480px) {
+    .stats-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stat { padding: 16px 14px; }
+    .stat-value { font-size: 26px; }
+    .stat-value.smaller { font-size: 22px; }
+    .discovery-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .disc-stat-value { font-size: 22px; }
+    .loyal-grid { grid-template-columns: 1fr; }
+    .artist-name { width: 80px; font-size: 12px; }
+    .artist-hours { width: 40px; font-size: 12px; }
+    .section { padding: 16px 12px; }
+    .heatmap { grid-template-columns: 20px repeat(24, 1fr); }
+    .heatmap-label { font-size: 8px; width: 20px; }
+    .heatmap-cell { min-height: 6px; }
+    .list-row { gap: 6px; font-size: 13px; }
+    .earworm-count { font-size: 24px; min-width: 36px; }
+    h2 { font-size: 18px; }
+  }
+  @media (max-width: 360px) {
+    .artist-name { width: 65px; }
   }
 </style>
 </head>
@@ -640,12 +674,16 @@ const GENRE_COLORS = DATA.genre_colors || {};
 
   // ─── Stats row 1 ─────────────────────────────────────────
   const sr1 = document.getElementById('stats-row-1');
-  const skipLabel = D.skip_rate_first_yr && D.skip_rate_last_yr
-    ? `songs skipped within 30 seconds, ${D.skip_rate_first_yr} vs. ${D.skip_rate_last_yr}`
-    : 'skip rate trend';
-  const skipVal = (D.skip_rate_first != null && D.skip_rate_last != null)
-    ? `${D.skip_rate_first}% → ${D.skip_rate_last}%`
-    : '—';
+  // Explicit skips (Spotify's own flag) and short listens (under 30 s) are two
+  // different observations. Current exports often leave the flag null.
+  const haveSkips = D.skip_rate_first != null && D.skip_rate_last != null;
+  const yrs = `${D.skip_rate_first_yr} vs. ${D.skip_rate_last_yr}`;
+  const skipVal = haveSkips
+    ? `${D.skip_rate_first}% → ${D.skip_rate_last}%`
+    : (D.short_rate_first != null ? `${D.short_rate_first}% → ${D.short_rate_last}%` : '—');
+  const skipLabel = haveSkips
+    ? `of plays Spotify marked as skipped, ${yrs}. Listens under 30 seconds: ${D.short_rate_first}% → ${D.short_rate_last}%`
+    : `of listens ended before 30 seconds, ${yrs}. Spotify's skipped flag is missing for ${100 - (D.skip_flag_coverage || 0)}% of your history, so explicit skips can't be reported`;
   const stats1 = [
     { value: D.most_played_song?.plays || '—',
       label: `plays of one song: “${D.most_played_song?.track || '?'}” by ${D.most_played_song?.artist || '?'}` },
@@ -660,7 +698,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   stats1.forEach(s => {
     const div = document.createElement('div');
     div.className = 'stat';
-    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${s.value}</div><div class="stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${escapeHtml(s.value)}</div><div class="stat-label">${escapeHtml(s.label)}</div>`;
     sr1.appendChild(div);
   });
 
@@ -686,7 +724,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   stats2.forEach(s => {
     const div = document.createElement('div');
     div.className = 'stat';
-    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${s.value}</div><div class="stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${escapeHtml(s.value)}</div><div class="stat-label">${escapeHtml(s.label)}</div>`;
     sr2.appendChild(div);
   });
 
@@ -719,7 +757,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   discStats.forEach(s => {
     const div = document.createElement('div');
     div.className = 'disc-stat';
-    div.innerHTML = `<div class="disc-stat-value">${s.value}</div><div class="disc-stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="disc-stat-value">${escapeHtml(s.value)}</div><div class="disc-stat-label">${escapeHtml(s.label)}</div>`;
     ds.appendChild(div);
   });
 
@@ -878,7 +916,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   }));
 
   function escapeHtml(v) {
-    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function renderListSection(id, items, fn) {
@@ -939,7 +977,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       const block = document.createElement('div');
       block.className = 'subgenre-block';
       const heading = document.createElement('h4');
-      heading.innerHTML = `${genre} <span>${info.total_hours}h total</span>`;
+      heading.innerHTML = `${escapeHtml(genre)} <span>${escapeHtml(info.total_hours)}h total</span>`;
       block.appendChild(heading);
 
       const bar = document.createElement('div');
@@ -964,7 +1002,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       info.subs.forEach((s, i) => {
         const item = document.createElement('div');
         item.className = 'subgenre-legend-item';
-        item.innerHTML = `<span class="subgenre-legend-swatch" style="background:${info.colors[i] || '#b8b7b2'}"></span>${s.name} <span class="subgenre-legend-pct">${s.pct}%</span>`;
+        item.innerHTML = `<span class="subgenre-legend-swatch" style="background:${info.colors[i] || '#b8b7b2'}"></span>${escapeHtml(s.name)} <span class="subgenre-legend-pct">${escapeHtml(s.pct)}%</span>`;
         legend.appendChild(item);
       });
       block.appendChild(legend);
@@ -1053,7 +1091,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
         const el = document.createElement('div');
         el.className = 'era';
         el.style.flex = `${span}`;
-        el.innerHTML = `<div class="era-name">${era.name}</div><div class="era-years">${era.years}</div>`;
+        el.innerHTML = `<div class="era-name">${escapeHtml(era.name)}</div><div class="era-years">${escapeHtml(era.years)}</div>`;
         eraContainer.appendChild(el);
       });
     }
@@ -1081,7 +1119,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       const pctSpan = document.createElement('span');
       pctSpan.className = 'legend-pct';
       pctSpan.textContent = overallPcts[g] + '%';
-      item.innerHTML = `<span class="legend-swatch" style="background:${GENRE_COLORS[g] || '#ccc'}"></span>${g} `;
+      item.innerHTML = `<span class="legend-swatch" style="background:${GENRE_COLORS[g] || '#ccc'}"></span>${escapeHtml(g)} `;
       item.appendChild(pctSpan);
       legendEl.appendChild(item);
       pctEls[g] = pctSpan;
@@ -1173,9 +1211,23 @@ const GENRE_COLORS = DATA.genre_colors || {};
     return `Genres cover ${(100 - (D.genre_unclassified_pct || 0)).toFixed(1)}% of listening time (${parts.join(', ')}).${unclassified}`;
   }
 
+  function importNote() {
+    const m = D.import;
+    if (!m || !m.files_used) return '';
+    const n = x => Number(x).toLocaleString();
+    const bits = [`${n(m.plays)} plays of 30 seconds or more`];
+    if (m.short_listens) bits.push(`${n(m.short_listens)} shorter listens counted only as skips`);
+    if (m.non_music) bits.push(`${n(m.non_music)} podcast or other non-music rows left out`);
+    if (m.overlap_dropped) bits.push(`${n(m.overlap_dropped)} rows repeated across files dropped`);
+    if (m.malformed) bits.push(`${n(m.malformed)} rows with unreadable timestamps skipped`);
+    const gap = D.largest_gap;
+    if (gap && gap.days >= 45) bits.push(`no plays at all between ${gap.from} and ${gap.to} (${n(gap.days)} days), which may be a real break or a missing file`);
+    return `Read ${n(m.records)} rows from ${m.files_used} file${m.files_used === 1 ? '' : 's'}: ${bits.join('; ')}.`;
+  }
+
   // ─── Source footer ──────────────────────────────────────
   document.getElementById('source-footer').textContent =
-    `Source: Spotify Extended Streaming History (GDPR data export), ${D.date_range_start || '?'}–${D.date_range_end || '?'}, times in ${D.timezone || 'local time'}. ${genreNote()} Generated by spotify-history-report.`;
+    `Source: Spotify Extended Streaming History (GDPR data export), ${D.date_range_start || '?'}–${D.date_range_end || '?'}, times in ${D.timezone || 'local time'}. ${importNote()} ${genreNote()} Generated by spotify-history-report.`;
 
 })();
 </script>

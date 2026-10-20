@@ -13,6 +13,7 @@ Config :: struct {
 	provider:       string,
 	model:          string,
 	timezone:       string,
+	enrich:         bool, // consent to send artist names to the provider; off unless set
 }
 
 LLM_Provider :: enum {
@@ -53,6 +54,7 @@ load_config :: proc() -> Config {
 		provider:       string,
 		model:          string,
 		timezone:       string,
+		enrich:         bool,
 	}
 	raw: Raw_Config
 	json_err := json.unmarshal(data, &raw)
@@ -65,6 +67,7 @@ load_config :: proc() -> Config {
 	cfg.provider = raw.provider
 	cfg.model = raw.model
 	cfg.timezone = raw.timezone
+	cfg.enrich = raw.enrich
 	return cfg
 }
 
@@ -81,7 +84,8 @@ save_config :: proc(cfg: Config) -> bool {
 	strings.write_string(&j, fmt.aprintf("  \"openrouter_key\": \"%s\",\n", json_escape(cfg.openrouter_key)))
 	strings.write_string(&j, fmt.aprintf("  \"provider\": \"%s\",\n", json_escape(cfg.provider)))
 	strings.write_string(&j, fmt.aprintf("  \"model\": \"%s\",\n", json_escape(cfg.model)))
-	strings.write_string(&j, fmt.aprintf("  \"timezone\": \"%s\"\n", json_escape(cfg.timezone)))
+	strings.write_string(&j, fmt.aprintf("  \"timezone\": \"%s\",\n", json_escape(cfg.timezone)))
+	strings.write_string(&j, fmt.aprintf("  \"enrich\": %v\n", cfg.enrich))
 	strings.write_string(&j, "}\n")
 
 	path := config_path()

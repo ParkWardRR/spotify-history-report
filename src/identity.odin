@@ -246,9 +246,9 @@ build_identity_table :: proc(plays: []Play, ov: ^Overrides = nil) -> Identity_Ta
 		if id not_in accs do accs[id] = Id_Acc{uri = p.uri}
 		a := &accs[id]
 		a.plays += 1
-		a.names[play_key(p)] += 1
+		a.names[text_key(p)] += 1
 		if len(a.album) == 0 do a.album = p.album
-		song_plays[play_key(p)] += 1
+		song_plays[text_key(p)] += 1
 		if len(p.uri) > 0 { t.summary.plays_by_uri += 1 } else { t.summary.plays_metadata_only += 1 }
 	}
 
@@ -472,11 +472,44 @@ check_keys :: proc(v: json.Value, allowed: []string, where_: string) -> string {
 	return ""
 }
 
-// A reference resolved to the (title, artist) text plays carry.
-resolve_ref :: proc(r: Override_Ref, uri_names: map[string]Track_Key) -> (k: Track_Key, ok: bool) {
-	if len(r.artist) > 0 && len(r.title) > 0 do return Track_Key{r.title, r.artist}, true
+// What the identity layer knows about the export, for resolving merge references.
+Identity_Index :: struct {
+	by_uri:  map[string]Track_Key, // uri → its identity (primary title and artist, uri)
+	by_text: map[Track_Key]Track_Key, // exact (title, artist) → its most-played identity
+}
+
+identity_index_destroy :: proc(ix: ^Identity_Index) {
+	delete(ix.by_uri); delete(ix.by_text)
+}
+
+build_identity_index :: proc(table: Identity_Table) -> (ix: Identity_Index) {
+	best_plays: map[Track_Key]int
+	defer delete(best_plays)
+	for id in table.identities {
+		key := Track_Key{id.title, id.artist, id.uri}
+		if id.source == .Spotify_Uri do ix.by_uri[id.uri] = key
+		text := Track_Key{id.title, id.artist, ""}
+		// The most-played identity speaks for the text; ties go to the lower id so
+		// the choice never depends on iteration order.
+		if cur, has := ix.by_text[text]; !has || id.plays > best_plays[text] || (id.plays == best_plays[text] && key.uri < cur.uri) {
+			ix.by_text[text] = key
+			best_plays[text] = id.plays
+		}
+	}
+	return
+}
+
+// A reference resolved to an identity. A text reference means every URI that
+// carries that exact title and artist, and stands for the most-played of them;
+// text that isn't in the export names a new, URI-less identity.
+resolve_ref :: proc(r: Override_Ref, ix: Identity_Index) -> (k: Track_Key, ok: bool) {
+	if len(r.artist) > 0 && len(r.title) > 0 {
+		text := Track_Key{r.title, r.artist, ""}
+		if known, has := ix.by_text[text]; has do return known, true
+		return text, true
+	}
 	if len(r.uri) > 0 {
-		k, ok = uri_names[r.uri]
+		k, ok = ix.by_uri[r.uri]
 		return
 	}
 	return
@@ -493,10 +526,10 @@ all_pairs_separated :: proc(songs: []Song, ov: ^Overrides) -> bool {
 		for b in a + 1 ..< len(songs) {
 			found := false
 			for sep in ov.keep_separate {
-				ka := Track_Key{sep.a.title, sep.a.artist}
-				kb := Track_Key{sep.b.title, sep.b.artist}
-				x := Track_Key{songs[a].title, songs[a].artist}
-				y := Track_Key{songs[b].title, songs[b].artist}
+				ka := Track_Key{sep.a.title, sep.a.artist, ""}
+				kb := Track_Key{sep.b.title, sep.b.artist, ""}
+				x := Track_Key{songs[a].title, songs[a].artist, ""}
+				y := Track_Key{songs[b].title, songs[b].artist, ""}
 				if (ka == x && kb == y) || (ka == y && kb == x) { found = true; break }
 			}
 			if !found do return false
@@ -505,75 +538,115 @@ all_pairs_separated :: proc(songs: []Song, ov: ^Overrides) -> bool {
 	return true
 }
 
-// Applies merge overrides by rewriting the title/artist of the affected plays.
-// Returns how many plays changed. Reversible by deleting the override: the
-// export is never modified and the rewrite happens on every run.
+// Gives every play the title and artist its URI carries most often, so one
+// URI is always one track however Spotify's metadata drifted. The skip tally is
+// keyed the same way and follows. Returns how many plays were renamed.
+canonicalize_uri_names :: proc(plays: []Play, table: Identity_Table, tally: ^Skip_Tally = nil) -> (renamed: int) {
+	ix := build_identity_index(table)
+	defer identity_index_destroy(&ix)
+	for &p in plays {
+		if len(p.uri) == 0 do continue
+		if k, ok := ix.by_uri[p.uri]; ok && (k.track != p.track || k.artist != p.artist) {
+			p.track, p.artist = k.track, k.artist
+			renamed += 1
+		}
+	}
+	if tally != nil do remap_tally(tally, proc(k: Track_Key, ctx: rawptr) -> Track_Key {
+		ix := (^Identity_Index)(ctx)
+		if len(k.uri) > 0 { if c, ok := ix.by_uri[k.uri]; ok do return c }
+		return k
+	}, &ix)
+	return
+}
+
+remap_tally :: proc(tally: ^Skip_Tally, f: proc(k: Track_Key, ctx: rawptr) -> Track_Key, ctx: rawptr) {
+	remapped: map[Track_Key]int
+	for k, n in tally.track_skips do remapped[f(k, ctx)] += n
+	delete(tally.track_skips)
+	tally.track_skips = remapped
+}
+
+Merge_Plan :: struct {
+	ix:         Identity_Index,
+	uri_remap:  map[string]Track_Key,
+	text_remap: map[Track_Key]Track_Key, // exact (title, artist, "") → identity
+}
+
+merge_plan_destroy :: proc(m: ^Merge_Plan) {
+	identity_index_destroy(&m.ix); delete(m.uri_remap); delete(m.text_remap)
+}
+
+// Follows merges from `k` to where it ends up. `ok` is false after MAX_MERGE_CHAIN
+// hops, which means the merges loop.
+follow_merges :: proc(m: ^Merge_Plan, k: Track_Key) -> (cur: Track_Key, ok: bool) {
+	cur = k
+	if len(cur.uri) > 0 { if c, has := m.ix.by_uri[cur.uri]; has do cur = c }
+	for _ in 0 ..< MAX_MERGE_CHAIN {
+		if len(cur.uri) > 0 {
+			if next, has := m.uri_remap[cur.uri]; has && next != cur { cur = next; continue }
+		}
+		if next, has := m.text_remap[Track_Key{cur.track, cur.artist, ""}]; has && next != cur { cur = next; continue }
+		return cur, true
+	}
+	return cur, false
+}
+
+// Applies merge overrides by rewriting the identity (title, artist, URI) of the
+// affected plays. A reference by URI is exactly that URI. A reference by text
+// is every URI carrying that title and artist; as a target it stands for the
+// most-played of them and pulls the others in. Returns how many plays changed.
+// Reversible by deleting the override: the export is never modified and the
+// rewrite happens on every run.
 apply_overrides :: proc(plays: []Play, ov: Overrides, table: Identity_Table, tally: ^Skip_Tally = nil) -> (changed: int, err: string) {
 	if len(ov.merges) == 0 do return
 
-	uri_names: map[string]Track_Key
-	defer delete(uri_names)
-	for id in table.identities {
-		if id.source == .Spotify_Uri do uri_names[id.uri] = Track_Key{id.title, id.artist}
-	}
-
-	uri_remap: map[string]Track_Key
-	key_remap: map[Track_Key]Track_Key
-	defer { delete(uri_remap); delete(key_remap) }
+	plan := Merge_Plan{ix = build_identity_index(table)}
+	defer merge_plan_destroy(&plan)
 
 	for m, i in ov.merges {
 		if !ref_form_ok(m.from) do return 0, fmt.aprintf("merges[%d].from: give either \"uri\" or both \"artist\" and \"title\"", i)
 		if !ref_form_ok(m.into) do return 0, fmt.aprintf("merges[%d].into: give either \"uri\" or both \"artist\" and \"title\"", i)
-		target, ok := resolve_ref(m.into, uri_names)
+		target, ok := resolve_ref(m.into, plan.ix)
 		if !ok do return 0, fmt.aprintf("merges[%d].into: %s is not in this export", i, m.into.uri)
 
 		if len(m.from.uri) > 0 {
-			if m.from.uri not_in uri_names do return 0, fmt.aprintf("merges[%d].from: %s is not in this export", i, m.from.uri)
-			uri_remap[m.from.uri] = target
+			if m.from.uri not_in plan.ix.by_uri do return 0, fmt.aprintf("merges[%d].from: %s is not in this export", i, m.from.uri)
+			plan.uri_remap[m.from.uri] = target
 		} else {
-			from := Track_Key{m.from.title, m.from.artist}
-			if from == target do return 0, fmt.aprintf("merges[%d]: merges a track into itself", i)
-			key_remap[from] = target
+			from := Track_Key{m.from.title, m.from.artist, ""}
+			if from == (Track_Key{target.track, target.artist, ""}) do return 0, fmt.aprintf("merges[%d]: merges a track into itself", i)
+			plan.text_remap[from] = target
+		}
+		// Naming the target by text means all of its URIs, so they join the primary.
+		if len(m.into.uri) == 0 {
+			text := Track_Key{m.into.title, m.into.artist, ""}
+			if _, taken := plan.text_remap[text]; !taken do plan.text_remap[text] = target
 		}
 	}
 
-	follow :: proc(k: Track_Key, key_remap: map[Track_Key]Track_Key) -> (Track_Key, bool) {
-		cur := k
-		for _ in 0 ..< MAX_MERGE_CHAIN {
-			next, has := key_remap[cur]
-			if !has do return cur, true
-			cur = next
-		}
-		return cur, false
+	for uri, k in plan.uri_remap {
+		if _, ok := follow_merges(&plan, plan.ix.by_uri[uri]); !ok do return 0, fmt.aprintf("merge cycle involving %s", uri)
+		_ = k
 	}
-	for from in key_remap {
-		if _, ok := follow(from, key_remap); !ok do return 0, fmt.aprintf("merge cycle involving %q by %q", from.track, from.artist)
+	for from in plan.text_remap {
+		start := plan.ix.by_text[from] or_else from
+		if _, ok := follow_merges(&plan, start); !ok do return 0, fmt.aprintf("merge cycle involving %q by %q", from.track, from.artist)
 	}
 
 	for &p in plays {
-		target := play_key(p)
-		if len(p.uri) > 0 {
-			if k, ok := uri_remap[p.uri]; ok do target = k
-		}
-		target, _ = follow(target, key_remap)
-		if target != play_key(p) {
-			p.track, p.artist = target.track, target.artist
+		before := play_key(p)
+		target, _ := follow_merges(&plan, before)
+		if target != before {
+			p.track, p.artist, p.uri = target.track, target.artist, target.uri
 			changed += 1
 		}
 	}
 
-	// The skip tally is keyed by text, not URI, so a URI merge is mirrored onto
-	// that URI's primary spelling; any other spelling of it stays unmerged there.
-	if tally != nil {
-		for uri, target in uri_remap do key_remap[uri_names[uri]] = target
-		remapped: map[Track_Key]int
-		for k, n in tally.track_skips {
-			to, _ := follow(k, key_remap)
-			remapped[to] += n
-		}
-		delete(tally.track_skips)
-		tally.track_skips = remapped
-	}
+	// The skip tally is keyed like the plays, so it follows the same merges.
+	if tally != nil do remap_tally(tally, proc(k: Track_Key, ctx: rawptr) -> Track_Key {
+		target, _ := follow_merges((^Merge_Plan)(ctx), k)
+		return target
+	}, &plan)
 	return
 }
 
@@ -667,17 +740,20 @@ identity_report_text :: proc(t: Identity_Table, max_groups := 25) -> string {
 	line(&b, "    by fingerprint ", fmt_int(s.plays_by_fingerprint), "  (needs local audio)")
 	line(&b, "    metadata only  ", fmt_int(s.plays_metadata_only), fmt.tprintf("  (%.1f%%, unresolved)", pct(s.plays_metadata_only, s.plays)))
 	line(&b, "  identities       ", fmt_int(s.identities), "  (", fmt_int(s.identities_by_uri), " URI, ", fmt_int(s.identities_meta_only), " metadata-only)")
-	line(&b, "  songs            ", fmt_int(s.songs), "  (exact title + artist, what the report counts)")
+	line(&b, "  songs            ", fmt_int(s.songs), "  (exact title + artist)")
+	line(&b, "  The report counts each URI as its own track.")
 	if s.songs_multi_uri > 0 {
-		line(&b, "  ", fmt_int(s.songs_multi_uri), " songs span several URIs, counted together")
+		line(&b, "  ", fmt_int(s.songs_multi_uri), " songs appear under several URIs and are counted apart (listed below)")
 	}
 	if s.uris_multi_name > 0 {
-		line(&b, "  ", fmt_int(s.uris_multi_name), " URIs carry several spellings, counted apart")
+		line(&b, "  ", fmt_int(s.uris_multi_name), " URIs carry several spellings; each is counted as one track under its most-played spelling")
 	}
 	if s.merges_applied > 0 {
 		line(&b, "  overrides        ", fmt_int(s.merges_applied), " merges rewrote ", fmt_int(s.plays_remapped), " plays")
 	}
 	line(&b, "")
+
+	multi_uri_section(&b, t, max_groups)
 
 	if len(t.candidates) == 0 {
 		line(&b, "No duplicate or version candidates.")
@@ -701,4 +777,52 @@ identity_report_text :: proc(t: Identity_Table, max_groups := 25) -> string {
 		}
 	}
 	return strings.to_string(b)
+}
+
+// The same title and artist under several URIs. They are counted apart, so this
+// is the list to check when a favourite looks under-counted; one override line
+// per pair joins them.
+multi_uri_section :: proc(b: ^strings.Builder, t: Identity_Table, max_groups: int) {
+	Group :: struct { title, artist: string, ids: [dynamic]Track_Identity, plays: int }
+	groups: map[Track_Key]Group
+	defer { for _, &g in groups do delete(g.ids); delete(groups) }
+	for id in t.identities {
+		if id.source != .Spotify_Uri do continue
+		k := Track_Key{id.title, id.artist, ""}
+		g := groups[k]
+		g.title, g.artist = id.title, id.artist
+		append(&g.ids, id)
+		g.plays += id.plays
+		groups[k] = g
+	}
+	list: [dynamic]Group
+	defer delete(list)
+	for _, g in groups do if len(g.ids) > 1 do append(&list, g)
+	if len(list) == 0 do return
+	slice.sort_by(list[:], proc(a, b: Group) -> bool {
+		if a.plays != b.plays do return a.plays > b.plays
+		if a.artist != b.artist do return a.artist < b.artist
+		return a.title < b.title
+	})
+
+	line :: proc(b: ^strings.Builder, args: ..any) { strings.write_string(b, fmt.tprintln(..args, sep = "")) }
+	line(b, "Same title under several URIs (counted apart; join with a merge if they are one recording)")
+	for g, i in list {
+		if i >= max_groups {
+			line(b, "  … and ", fmt_int(len(list) - max_groups), " more")
+			break
+		}
+		slice.sort_by(g.ids[:], proc(a, b: Track_Identity) -> bool {
+			if a.plays != b.plays do return a.plays > b.plays
+			return a.uri < b.uri
+		})
+		line(b, "  ", g.artist, " — ", g.title, "  (", fmt_int(g.plays), " plays, ", fmt_int(len(g.ids)), " URIs)")
+		for id, j in g.ids {
+			line(b, "      ", fmt_int(id.plays), "×  ", id.uri, "  ", id.album)
+			if j > 0 {
+				line(b, "         {\"from\": {\"uri\": \"", id.uri, "\"}, \"into\": {\"uri\": \"", g.ids[0].uri, "\"}}")
+			}
+		}
+	}
+	line(b, "")
 }

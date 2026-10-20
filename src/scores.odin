@@ -41,6 +41,7 @@ SCORE_LIST_SIZE     :: 10
 Track_Score :: struct {
 	track:           string,
 	artist:          string,
+	uri:             string, // only to order two tracks that share a title and artist
 	plays:           int,
 	months_active:   int, // distinct calendar months with at least one play
 	activation:      f64, // at the end of the history
@@ -115,6 +116,7 @@ Track_Hist :: struct {
 // One pass over chronologically sorted plays. Returns histories in order of
 // first play, which is deterministic.
 build_histories :: proc(plays: []Play) -> [dynamic]Track_Hist {
+	ensure_sessions(plays)
 	hists: [dynamic]Track_Hist
 	index: map[Track_Key]int
 	defer delete(index)
@@ -126,7 +128,7 @@ build_histories :: proc(plays: []Play) -> [dynamic]Track_Hist {
 		if !seen {
 			hi = len(hists)
 			index[k] = hi
-			append(&hists, Track_Hist{score = Track_Score{track = p.track, artist = p.artist}})
+			append(&hists, Track_Hist{score = Track_Score{track = p.track, artist = p.artist, uri = p.uri}})
 		}
 		h := &hists[hi]
 		h.score.plays += 1
@@ -135,8 +137,8 @@ build_histories :: proc(plays: []Play) -> [dynamic]Track_Hist {
 			h.score.months_active += 1
 			h.last_month = m
 		}
-		if i == 0 || p.unix - plays[i - 1].unix > SESSION_GAP_SECONDS do h.score.openers += 1
-		if i == len(plays) - 1 || plays[i + 1].unix - p.unix > SESSION_GAP_SECONDS do h.score.closers += 1
+		if p.opens_session do h.score.openers += 1
+		if p.closes_session do h.score.closers += 1
 	}
 	return hists
 }
@@ -151,7 +153,8 @@ destroy_histories :: proc(h: ^[dynamic]Track_Hist) {
 before_by :: proc(a_v, b_v: f64, a, b: Track_Score) -> bool {
 	if a_v != b_v do return a_v > b_v
 	if a.artist != b.artist do return a.artist < b.artist
-	return a.track < b.track
+	if a.track != b.track do return a.track < b.track
+	return a.uri < b.uri
 }
 
 take :: proc(dst: ^[dynamic]Track_Score, src: []Track_Score) {
@@ -314,7 +317,7 @@ evaluate_rankers :: proc(plays: []Play, folds := 6, horizon_days := 30, k := 20)
 				case 1: v = f64(n)
 				case:   v = activation_at(h.times[:n], cut, RANKER_DECAYS[r - 2])
 				}
-				append(&ranked, Ranked{v, Track_Key{h.score.track, h.score.artist}, replayed_in(h.times[:], cut, cut + horizon)})
+				append(&ranked, Ranked{v, Track_Key{h.score.track, h.score.artist, h.score.uri}, replayed_in(h.times[:], cut, cut + horizon)})
 			}
 			slice.sort_by(ranked[:], proc(a, b: Ranked) -> bool {
 				if a.value != b.value do return a.value > b.value

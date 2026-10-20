@@ -17,16 +17,16 @@ utc_clock :: proc() -> Clock {
 	return Clock{name = "UTC"}
 }
 
-mk_play :: proc(ts, track, artist: string, ms: i64 = 200000, skipped := false) -> Play {
+mk_play :: proc(ts, track, artist: string, ms: i64 = 200000, skipped := Skip_Flag.No) -> Play {
 	c := utc_clock()
 	rec := Streaming_Record{
 		ts = ts, ms_played = ms,
 		master_metadata_track_name = track,
 		master_metadata_album_artist_name = artist,
-		skipped = skipped,
 	}
 	p, status := record_to_play(rec, &c)
 	assert(status == .Ok, "fixture timestamp must parse")
+	p.skipped = skipped
 	return p
 }
 
@@ -201,10 +201,11 @@ test_sessions_split_on_gaps_not_on_calendar_boundaries :: proc(t: ^testing.T) {
 	)
 	testing.expect_value(t, len(s.session_openers), 1)
 
-	// More than 30 minutes apart starts a new session.
+	// More than 30 minutes of idle time starts a new session. Rows carry the time a
+	// stream ended, so the 200 s of "Second" are subtracted: it started 10:31:40.
 	s = stats_for(
 		mk_play("2020-05-01T10:00:00Z", "First", "X"),
-		mk_play("2020-05-01T10:31:00Z", "Second", "X"),
+		mk_play("2020-05-01T10:35:00Z", "Second", "X"),
 	)
 	testing.expect_value(t, len(s.session_openers), 2)
 }
@@ -267,27 +268,56 @@ test_explore_obsess_buckets_are_a_partition :: proc(t: ^testing.T) {
 // ── Skips ────────────────────────────────────────────────────────────────────
 
 @(test)
-test_skip_rate_counts_short_plays :: proc(t: ^testing.T) {
+test_explicit_skips_and_short_listens_are_reported_separately :: proc(t: ^testing.T) {
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	key := Track_Key{"A", "X"}
-	tally_record(&tally, 2020, key, false)
-	tally_record(&tally, 2020, key, false)
-	tally_record(&tally, 2020, key, true)  // skipped flag
-	tally_record(&tally, 2020, key, true)  // < 30s
-	tally_record(&tally, 2021, key, false)
+	key := Track_Key{"A", "X", ""}
+	tally_record(&tally, 2020, key, .No, 200000)
+	tally_record(&tally, 2020, key, .No, 200000)
+	tally_record(&tally, 2020, key, .Yes, 200000)  // skipped flag
+	tally_record(&tally, 2020, key, .No, 10000)  // < 30s
+	tally_record(&tally, 2021, key, .No, 200000)
 
 	list := [?]Play{mk_play("2020-01-01T12:00:00Z", "A", "X"), mk_play("2021-01-01T12:00:00Z", "A", "X")}
 	s := compute_stats(list[:], &tally)
-	testing.expect_value(t, s.skip_rate_first, 50)
+	testing.expect_value(t, s.skip_rate_first, 25)  // 1 flagged skip of 4 flagged rows
+	testing.expect_value(t, s.short_rate_first, 25) // 1 listen under 30 s of 4 rows
 	testing.expect_value(t, s.skip_rate_last, 0)
+	testing.expect_value(t, s.short_rate_last, 0)
+	testing.expect_value(t, s.skip_flag_coverage, 100)
 }
 
 @(test)
-test_is_skip_and_qualifies :: proc(t: ^testing.T) {
-	testing.expect(t, is_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 29999)))
-	testing.expect(t, !is_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 30000)))
-	testing.expect(t, is_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 200000, skipped = true)))
+test_null_skipped_flag_is_unknown_not_false :: proc(t: ^testing.T) {
+	tally: Skip_Tally
+	defer skip_tally_destroy(&tally)
+	key := Track_Key{"A", "X", ""}
+	// A year where Spotify left the flag out: short listens are still observable,
+	// explicit skips are not, and must not be reported as 0%.
+	for _ in 0..<3 do tally_record(&tally, 2023, key, .Unknown, 200000)
+	tally_record(&tally, 2023, key, .Unknown, 4000)
+	// A later year where the flag is present.
+	tally_record(&tally, 2024, key, .No, 200000)
+	tally_record(&tally, 2024, key, .Yes, 200000)
+
+	list := [?]Play{mk_play("2023-01-01T12:00:00Z", "A", "X", skipped = .Unknown), mk_play("2024-01-01T12:00:00Z", "A", "X")}
+	s := compute_stats(list[:], &tally)
+	testing.expect_value(t, s.skip_rate_first, -1)    // unknown, not 0
+	testing.expect_value(t, s.short_rate_first, 25)
+	testing.expect_value(t, s.skip_rate_last, 50)
+	testing.expect_value(t, s.skip_flag_coverage, 33) // 2 of 6 rows carry the flag
+
+	j := report_json(s)
+	testing.expect(t, strings.contains(j, `"skip_rate_first":null`))
+}
+
+@(test)
+test_skip_signals_and_qualifies :: proc(t: ^testing.T) {
+	testing.expect(t, short_listen(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 29999)))
+	testing.expect(t, !short_listen(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 30000)))
+	testing.expect(t, explicit_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 200000, skipped = .Yes)))
+	testing.expect(t, !explicit_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 200000, skipped = .Unknown)))
+	testing.expect(t, !explicit_skip(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 5000))) // short, but nobody flagged it
 	testing.expect(t, !qualifies(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 29999)))
 	testing.expect(t, qualifies(mk_play("2020-01-01T12:00:00Z", "A", "X", ms = 30000)))
 }
@@ -303,7 +333,7 @@ test_never_skipped_ignores_tracks_with_short_plays :: proc(t: ^testing.T) {
 
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	tally_record(&tally, 2020, Track_Key{"Song", "Art"}, true) // a sub-30s play that was filtered out
+	tally_record(&tally, 2020, Track_Key{"Song", "Art", ""}, .No, 5000) // a sub-30s play that was filtered out
 	with_tally := compute_stats(plays[:], &tally)
 	testing.expect_value(t, len(with_tally.never_skipped), 0)
 }
@@ -405,7 +435,7 @@ test_parser_handles_podcast_nulls_unknown_fields_and_uri :: proc(t: ^testing.T) 
 	testing.expect_value(t, p.conn_country, "US")
 	testing.expect_value(t, p.shuffle, true)
 	testing.expect_value(t, p.offline, false)
-	testing.expect_value(t, p.skipped, false)
+	testing.expect_value(t, p.skipped, Skip_Flag.Unknown)
 	testing.expect_value(t, p.album, "Alb")
 
 	// Only the required fields present: optional ones default cleanly.
@@ -425,46 +455,16 @@ test_record_with_bad_timestamp_is_reported :: proc(t: ^testing.T) {
 	testing.expect_value(t, status, Record_Status.Bad_Timestamp)
 }
 
-@(test)
-test_load_records_rejects_missing_empty_and_malformed :: proc(t: ^testing.T) {
-	_, ok := load_records("/nonexistent/nowhere.json")
-	testing.expect(t, !ok)
-
-	dir := os.temp_directory(context.temp_allocator) or_else "/tmp"
-	empty := fmt.tprintf("%s/shr_test_empty.json", dir)
-	bad := fmt.tprintf("%s/shr_test_bad.json", dir)
-	_ = os.write_entire_file(empty, transmute([]u8)string("[]"))
-	_ = os.write_entire_file(bad, transmute([]u8)string("[{\"ts\":"))
-	defer { os.remove(empty); os.remove(bad) }
-
-	recs, ok2 := load_records(empty)
-	testing.expect(t, ok2)
-	testing.expect_value(t, len(recs), 0)
-	_, ok3 := load_records(bad)
-	testing.expect(t, !ok3)
-}
-
 // ── End to end on the sample export ──────────────────────────────────────────
 
 SAMPLE_DIR :: #directory + "../sample"
 
 load_sample :: proc(c: ^Clock) -> (plays: [dynamic]Play, tally: Skip_Tally, bad: int) {
-	files := find_json_files(SAMPLE_DIR)
-	for path in files {
-		records, ok := load_records(path)
-		assert(ok)
-		for &rec in records {
-			p, status := record_to_play(rec, c)
-			#partial switch status {
-			case .Bad_Timestamp: bad += 1
-			case .Ok:
-				tally_record(&tally, p.year, play_key(p), is_skip(p))
-				if qualifies(p) do append(&plays, p)
-			}
-		}
-	}
-	sort_plays(plays[:])
-	return
+	scan := scan_inputs({SAMPLE_DIR})
+	assert(len(scan.err) == 0)
+	r, ok := load_plays(scan.entries[:], c, false)
+	assert(ok)
+	return r.plays, r.tally, r.summary.malformed
 }
 
 @(test)
@@ -495,4 +495,23 @@ test_sample_report_is_reproducible_and_sane :: proc(t: ^testing.T) {
 	for e in s1.explore_obsess {
 		testing.expect_value(t, e.new_pct + e.top10_pct + e.rest_pct, 100)
 	}
+}
+
+// ── Report options ───────────────────────────────────────────────────────────
+
+@(test)
+test_noindex_adds_robots_tags_only_when_asked :: proc(t: ^testing.T) {
+	s := stats_for(mk_play("2024-03-01T12:00:00Z", "Song", "Artist"))
+
+	plain, ok1 := render_report(s, false)
+	testing.expect(t, ok1)
+	testing.expect(t, !strings.contains(plain, `name="robots"`), "robots tag must be absent by default")
+
+	hidden, ok2 := render_report(s, true)
+	testing.expect(t, ok2)
+	testing.expect(t, strings.contains(hidden, `<meta name="robots" content="noindex, nofollow, noarchive">`))
+	testing.expect(t, strings.contains(hidden, `<meta name="googlebot" content="noindex, nofollow">`))
+	// Exactly one pair, right after the charset line, and the data is untouched.
+	testing.expect_value(t, strings.count(hidden, `name="robots"`), 1)
+	testing.expect_value(t, len(hidden) - len(plain), len(NOINDEX_REPLACEMENT) - len(NOINDEX_ANCHOR))
 }

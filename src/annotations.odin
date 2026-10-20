@@ -291,7 +291,7 @@ build_genre_resolver :: proc(f: Annotation_File, user: []User_Annotation) -> Gen
 	consider :: proc(r: ^Genre_Resolver, ot: ^map[Track_Key]string, oa: ^map[string]string, artist, title, value, observed: string, src: Annotation_Source) {
 		pick := Genre_Pick{value, src}
 		if len(title) > 0 {
-			k := Track_Key{title, artist}
+			k := Track_Key{title, artist, ""}
 			if old, has := r.by_track[k]; !has || pick_replaces(pick, observed, old, ot^[k]) {
 				r.by_track[k] = pick
 				ot^[k] = observed
@@ -323,7 +323,7 @@ genre_resolver_destroy :: proc(r: ^Genre_Resolver) {
 }
 
 resolve_genre :: proc(r: ^Genre_Resolver, track, artist: string) -> (pick: Genre_Pick, ok: bool) {
-	t, has_t := r.by_track[Track_Key{track, artist}]
+	t, has_t := r.by_track[Track_Key{track, artist, ""}]
 	a, has_a := r.by_artist[artist]
 	switch {
 	case has_t && t.source == .User: return t, true

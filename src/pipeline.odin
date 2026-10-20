@@ -5,6 +5,9 @@ package spotify_report
 // program_send from a worker thread; plain mode points it at a line printer.
 
 import "core:fmt"
+import "core:hash"
+import "core:mem"
+import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
@@ -53,13 +56,16 @@ Done_Msg :: struct {
 }
 
 Run_Opts :: struct {
-	data_dir:    string,
+	inputs:      []string, // a folder, a ZIP, or .json files
+	data_dir:    string,   // where .shr/ lives; derived from the first input
 	output_path: string,
 	provider:    LLM_Provider,
 	api_key:     string,
 	model:       string,
 	timezone:    string, // IANA name; empty means the default
 	decay:       f64,    // memory decay for the behaviour scores; 0 means the default
+	enrich:      bool,   // allow sending artist names to the LLM provider (off by default)
+	noindex:     bool,   // inject robots noindex/nofollow meta tags into the report
 }
 
 emit: proc(msg: Msg) = proc(msg: Msg) {}
@@ -68,40 +74,146 @@ stage_msg :: proc(stage: Stage, state: Stage_State, detail: string, current := 0
 	emit(Stage_Msg{stage, state, current, total, detail})
 }
 
-Load_Result :: struct {
-	plays:          [dynamic]Play,
-	tally:          Skip_Tally,
-	total_records:  int,
-	bad_timestamps: int,
-	failed_path:    string, // set when a file could not be parsed
+// What the import found, shown to the user so a surprising report can be
+// traced to its input.
+Import_Summary :: struct {
+	source:           string, // "folder", "ZIP" or "files"
+	files_used:       int,    // streaming-history files that were read
+	files_ignored:    int,    // other JSON in the package (playlists, searches, …)
+	files_identical:  int,    // byte-for-byte copies of a file already read
+	account_files:    int,    // one-year StreamingHistory*.json files (not supported)
+	records:          int,    // rows in the used files
+	non_music:        int,    // podcasts, audiobooks, video: no track or artist
+	malformed:        int,    // rows whose timestamp could not be read
+	overlap_dropped:  int,    // rows identical to one in a different file
+	music_events:     int,    // rows with a track and artist, after the above
+	short_listens:    int,    // music events under 30 s (not plays)
+	plays:            int,    // qualifying plays (30 s or more)
 }
 
-// Reads every export file into chronologically ordered plays, plus the skip
-// tally covering the records that don't qualify.
-load_plays :: proc(files: []string, clock: ^Clock, progress: bool) -> (r: Load_Result, ok: bool) {
-	for path, fi in files {
-		records, loaded := load_records(path)
-		if !loaded {
-			r.failed_path = path
+Load_Result :: struct {
+	plays:   [dynamic]Play,
+	tally:   Skip_Tally,
+	summary: Import_Summary,
+	err:     string, // set when the input is unusable
+	hint:    string,
+}
+
+// Reads every history file into chronologically ordered plays, plus the skip
+// tally covering the records that don't qualify. Files are recognised by what
+// is in them, identical copies are read once, and a row that repeats one from a
+// different file (overlapping exports) is dropped and counted. Repeats inside
+// one file are kept: those can be real replays.
+load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r: Load_Result, ok: bool) {
+	seen_files: map[u64]bool
+	seen_rows: map[u64]int // row fingerprint → index of the file it first appeared in
+	events: [dynamic]Session_Event // every music row, for sessions
+	defer delete(events)
+	defer { delete(seen_files); delete(seen_rows) }
+
+	for e, fi in entries {
+		data, rerr := read_input(e)
+		if len(rerr) > 0 {
+			r.err = fmt.aprintf("%s %s", e.name, rerr)
+			r.hint = "Download the export again, or extract it and pass the folder."
 			return r, false
 		}
-		r.total_records += len(records)
+		fp := file_fingerprint(data)
+		kind, records := classify_file(e.name, data)
+		delete(data)
+
+		switch kind {
+		case .Other:
+			r.summary.files_ignored += 1
+			continue
+		case .Account_History:
+			r.summary.account_files += 1
+			continue
+		case .Damaged:
+			r.err = fmt.aprintf("%s is not valid JSON", e.name)
+			r.hint = "The file looks truncated. Download the export again."
+			return r, false
+		case .Streaming_History:
+		}
+		if fp in seen_files {
+			r.summary.files_identical += 1
+			delete(records)
+			continue
+		}
+		seen_files[fp] = true
+		r.summary.files_used += 1
+		r.summary.records += len(records)
 
 		for &rec in records {
 			play, status := record_to_play(rec, clock)
 			switch status {
-			case .Not_A_Track:   continue
-			case .Bad_Timestamp: r.bad_timestamps += 1; continue
+			case .Not_A_Track:   r.summary.non_music += 1; continue
+			case .Bad_Timestamp: r.summary.malformed += 1; continue
 			case .Ok:
 			}
-			tally_record(&r.tally, play.year, play_key(play), is_skip(play))
-			if qualifies(play) do append(&r.plays, play)
+			row := row_fingerprint(rec)
+			if first, dup := seen_rows[row]; dup && first != fi {
+				r.summary.overlap_dropped += 1
+				continue
+			}
+			seen_rows[row] = fi
+			r.summary.music_events += 1
+			tally_record(&r.tally, play.year, play_key(play), play.skipped, play.ms)
+			slot := -1
+			if qualifies(play) {
+				slot = len(r.plays)
+				append(&r.plays, play)
+			} else {
+				r.summary.short_listens += 1
+			}
+			append(&events, Session_Event{play.unix, play.ms, slot})
 		}
 		delete(records)
-		if progress do stage_msg(.Load, .Active, filepath.base(path), fi + 1, len(files))
+		if progress do stage_msg(.Load, .Active, e.name, fi + 1, len(entries))
+	}
+	r.summary.plays = len(r.plays)
+
+	if r.summary.files_used == 0 {
+		r.err, r.hint = no_history_message(entries, r.summary)
+		return r, false
+	}
+	assign_sessions(events[:], r.plays[:]) // before sorting: slots index the load order
+	if len(r.plays) == 0 {
+		r.err = "No listening of 30 seconds or more in this export."
+		r.hint = "Every music row ended before 30 seconds, so there is nothing to report on. Check that this is the complete Extended Streaming History."
+		if r.summary.music_events == 0 do r.err, r.hint = "The streaming-history files contain no music listening.", "They only hold podcasts or other non-music rows, or no rows at all. Check that you downloaded the Extended Streaming History."
+		return r, false
 	}
 	sort_plays(r.plays[:])
 	return r, true
+}
+
+// Identity of a row for overlap detection: when it ended, what it was and for
+// how long. Two honest plays never share all of these.
+row_fingerprint :: proc(rec: Streaming_Record) -> u64 {
+	h := hash.fnv64a(transmute([]u8)rec.ts)
+	h = hash.fnv64a(transmute([]u8)(rec.spotify_track_uri.? or_else (rec.master_metadata_track_name.? or_else "")), h)
+	h = hash.fnv64a(transmute([]u8)(rec.master_metadata_album_artist_name.? or_else ""), h)
+	ms := rec.ms_played
+	return hash.fnv64a(mem.ptr_to_bytes(&ms), h)
+}
+
+// Explains why nothing usable was found, in terms of what the user can do.
+no_history_message :: proc(entries: []Input_Entry, sum: Import_Summary) -> (err, hint: string) {
+	if sum.account_files > 0 {
+		return "This is your recent account history, not Extended Streaming History.",
+			"The basic download only covers about the last year and has no track IDs. Request \"Extended streaming history\" at spotify.com/account/privacy (run --guide for steps), then use that ZIP."
+	}
+	for e in entries {
+		base := e.name
+		if strings.contains(base, "Streaming_History_") do return "The streaming-history files contain no listening records.",
+			"They hold no rows at all. Download the Extended Streaming History again."
+	}
+	if len(entries) == 0 {
+		return "No .json files found.", "Pass the ZIP Spotify emailed you, the folder you extracted it to, or the Streaming_History_Audio_*.json files. Run --guide for how to get it."
+	}
+	return "None of the JSON files is Spotify streaming history.",
+		"Expected files named Streaming_History_Audio_*.json from the Extended Streaming History package. Run --guide for how to get it."
 }
 
 // Builds the identity table, applying `.shr/overrides.json` when present.
@@ -109,6 +221,8 @@ load_plays :: proc(files: []string, clock: ^Clock, progress: bool) -> (r: Load_R
 resolve_identities :: proc(plays: []Play, ov: Overrides, tally: ^Skip_Tally = nil) -> (table: Identity_Table, err: string) {
 	ov := ov
 	table = build_identity_table(plays, &ov)
+	// One URI is one track, whatever spellings it carries (see Track_Key).
+	canonicalize_uri_names(plays, table, tally)
 	if len(ov.merges) == 0 do return
 
 	changed, apply_err := apply_overrides(plays, ov, table, tally)
@@ -133,33 +247,31 @@ run_pipeline :: proc(o: Run_Opts) {
 	}
 
 	// ── Scan ──
-	stage_msg(.Scan, .Active, o.data_dir)
-	files := find_json_files(o.data_dir)
-	if len(files) == 0 {
-		fail(.Scan,
-			fmt.aprintf("No Streaming_History_Audio_*.json found in %s", o.data_dir),
-			"Run with --guide to learn how to get your Spotify data export.")
+	stage_msg(.Scan, .Active, input_label(o.inputs))
+	scan := scan_inputs(o.inputs)
+	if len(scan.err) > 0 {
+		fail(.Scan, scan.err, scan.hint)
 		return
 	}
-	stage_msg(.Scan, .Done, fmt.aprintf("%d file%s", len(files), "" if len(files) == 1 else "s"))
+	o := o
+	o.data_dir = scan.sidecar_dir
+	stage_msg(.Scan, .Done, fmt.aprintf("%d JSON file%s", len(scan.entries), "" if len(scan.entries) == 1 else "s"))
 
 	// ── Load ──
 	clock := make_clock(o.timezone)
-	stage_msg(.Load, .Active, "", 0, len(files))
-	loaded, ok := load_plays(files[:], &clock, true)
+	stage_msg(.Load, .Active, "", 0, len(scan.entries))
+	loaded, ok := load_plays(scan.entries[:], &clock, true)
 	if !ok {
-		fail(.Load, fmt.aprintf("Failed to parse %s", loaded.failed_path), "The file is not valid Streaming_History JSON.")
+		fail(.Load, loaded.err, loaded.hint)
 		return
 	}
 	defer skip_tally_destroy(&loaded.tally)
 	all_plays := loaded.plays
 	tally := &loaded.tally // not a copy: overrides replace its maps in place
-	load_detail := fmt.aprintf("%s records · %s qualifying plays · %s",
-		fmt_int(loaded.total_records), fmt_int(len(all_plays)), clock_label(clock))
-	if loaded.bad_timestamps > 0 {
-		load_detail = fmt.aprintf("%s · %s unreadable timestamps skipped", load_detail, fmt_int(loaded.bad_timestamps))
-	}
-	stage_msg(.Load, .Done, load_detail, len(files), len(files))
+	loaded.summary.source = input_kind(o.inputs)
+	load_detail := fmt.aprintf("%s plays from %s · %s", fmt_int(len(all_plays)), import_files_text(loaded.summary), clock_label(clock))
+	if note := import_notes_text(loaded.summary); len(note) > 0 do load_detail = fmt.aprintf("%s · %s", load_detail, note)
+	stage_msg(.Load, .Done, load_detail, len(scan.entries), len(scan.entries))
 
 	// ── Identity ──
 	stage_msg(.Identity, .Active, "")
@@ -187,6 +299,7 @@ run_pipeline :: proc(o: Run_Opts) {
 	stats := new(Stats)
 	stats^ = compute_stats(all_plays[:], tally)
 	stats.timezone = clock_label(clock)
+	stats.import_summary = loaded.summary
 	stats.scores = compute_scores(all_plays[:], o.decay if o.decay > 0 else DEFAULT_DECAY)
 	stats.identity = table.summary
 	for c, i in table.candidates {
@@ -220,12 +333,8 @@ run_pipeline :: proc(o: Run_Opts) {
 	existing := len(resolver.by_artist)
 	added := 0
 	dirty := store_info.migrated // a legacy cache was imported and should be saved
-	if len(artist_list) > 0 {
-		if o.provider == .None {
-			fail(.Genres, fmt.aprintf("%s artists have no genre and no LLM API key is set", fmt_int(len(artist_list))),
-				"Run --setup to configure a key, pass --anthropic-key / --openai-key / --openrouter-key, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY. Or classify them yourself in .shr/overrides.json (run --annotations to see which).")
-			return
-		}
+	can_enrich := o.enrich && o.provider != .None
+	if len(artist_list) > 0 && can_enrich {
 		stage_msg(.Genres, .Active,
 			fmt.aprintf("%s · %s", provider_name(o.provider), o.model),
 			0, (len(artist_list) + BATCH_SIZE - 1) / BATCH_SIZE)
@@ -241,7 +350,11 @@ run_pipeline :: proc(o: Run_Opts) {
 	detail := fmt.aprintf("%s artists annotated", fmt_int(len(resolver.by_artist)))
 	if existing > 0 && added == 0 do detail = fmt.aprintf("%s artists annotated (stored)", fmt_int(existing))
 	if added > 0 do detail = fmt.aprintf("%s from storage · %s new via %s", fmt_int(existing), fmt_int(added), provider_name(o.provider))
-	if len(artist_list) > added do detail = fmt.aprintf("%s · %d still unclassified", detail, len(artist_list) - added)
+	if len(artist_list) > added do detail = fmt.aprintf("%s · %s unclassified", detail, fmt_int(len(artist_list) - added))
+	if len(artist_list) > 0 && !can_enrich {
+		// Never a failure: the core report needs no genres, and Unclassified is a result.
+		detail = fmt.aprintf("%s · enrichment off, nothing sent anywhere", detail)
+	}
 	if store_info.migrated && len(store.migrated_from) > 0 do detail = fmt.aprintf("%s · imported %s", detail, store.migrated_from)
 	if resolver.user_artists + resolver.user_tracks > 0 {
 		detail = fmt.aprintf("%s · %d of yours", detail, resolver.user_artists + resolver.user_tracks)
@@ -252,7 +365,7 @@ run_pipeline :: proc(o: Run_Opts) {
 
 	// ── Report ──
 	stage_msg(.Report, .Active, o.output_path)
-	if !generate_report(stats^, o.output_path) {
+	if !generate_report(stats^, o.output_path, o.noindex) {
 		fail(.Report, fmt.aprintf("Failed to write %s", o.output_path), "Check that the output directory exists and is writable.")
 		return
 	}
@@ -294,4 +407,36 @@ plain_emit :: proc(msg: Msg) {
 		}
 		free_all(context.temp_allocator)
 	}
+}
+
+// ── Describing the input ─────────────────────────────────────────────────────
+
+input_label :: proc(inputs: []string) -> string {
+	if len(inputs) == 1 do return inputs[0]
+	return fmt.aprintf("%d inputs", len(inputs))
+}
+
+input_kind :: proc(inputs: []string) -> string {
+	if len(inputs) > 1 do return "files"
+	if len(inputs) == 1 {
+		if os.is_dir(inputs[0]) do return "folder"
+		if is_zip_path(inputs[0]) do return "ZIP"
+	}
+	return "file"
+}
+
+import_files_text :: proc(s: Import_Summary) -> string {
+	return fmt.aprintf("%d file%s", s.files_used, "" if s.files_used == 1 else "s")
+}
+
+// The surprising parts of an import, each as a short clause; empty when none.
+import_notes_text :: proc(s: Import_Summary) -> string {
+	parts: [dynamic]string
+	if s.short_listens > 0 do append(&parts, fmt.aprintf("%s short listens", fmt_int(s.short_listens)))
+	if s.non_music > 0 do append(&parts, fmt.aprintf("%s non-music rows skipped", fmt_int(s.non_music)))
+	if s.overlap_dropped > 0 do append(&parts, fmt.aprintf("%s rows repeated across files dropped", fmt_int(s.overlap_dropped)))
+	if s.files_identical > 0 do append(&parts, fmt.aprintf("%d identical file%s ignored", s.files_identical, "" if s.files_identical == 1 else "s"))
+	if s.malformed > 0 do append(&parts, fmt.aprintf("%s rows with unreadable timestamps skipped", fmt_int(s.malformed)))
+	if s.files_ignored > 0 do append(&parts, fmt.aprintf("%d other JSON file%s ignored", s.files_ignored, "" if s.files_ignored == 1 else "s"))
+	return strings.join(parts[:], " · ")
 }

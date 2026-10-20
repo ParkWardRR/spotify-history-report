@@ -117,6 +117,7 @@ setup_update :: proc(m: rawptr, msg: Msg) -> (cmd: Cmd) {
 setup_save :: proc(s: ^Setup) {
 	opt := PROVIDER_OPTIONS[s.sel]
 	s.cfg.provider = opt.id
+	s.cfg.enrich = true // finishing setup after the disclosure below is the opt-in
 	if k := text_input_string(&s.key); len(k) > 0 {
 		k = strings.trim_space(k)
 		switch opt.id {
@@ -208,7 +209,7 @@ setup_view :: proc(m: rawptr, w, h: int) -> string {
 	}
 
 	card := panel("API key setup", join_v(rows[:]), pw)
-	intro := muted(wrap_text("The genre charts need an LLM to classify your artists. Your key is saved locally to ~/.config/spotify-history-report/config.json.", pw))
+	intro := muted(wrap_text("Genre enrichment is optional. Saving a key turns it on: your artist names (nothing else) are sent to the provider you pick. Reports work without it, and --enrich is how you switch it on per run otherwise. The key is saved locally to ~/.config/spotify-history-report/config.json.", pw))
 	block := center_block(join_v({logo_block(), "", intro, "", card, "", help}), w)
 	top := max(0, (h - block_height(block)) / 4)
 	return strings.concatenate({repeat_str("\n", top), block}, context.temp_allocator)

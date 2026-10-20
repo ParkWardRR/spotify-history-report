@@ -94,9 +94,53 @@ test_one_song_under_several_uris_and_one_uri_under_several_names :: proc(t: ^tes
 			testing.expect_value(t, id.alt_names, 1)
 		}
 	}
-	// Same text under two URIs is counted as one song by the report.
+	// Two URIs are two tracks even with the same text: the report does not merge
+	// them for you. One URI under two spellings is one track once canonicalised.
+	testing.expect_value(t, compute_stats(plays[:]).unique_tracks, 4) // raw: renamed splits by spelling
+	testing.expect_value(t, canonicalize_uri_names(plays[:], tbl), 1)
+	s := compute_stats(plays[:])
+	testing.expect_value(t, s.unique_tracks, 3) // Hit (album), Hit (compilation), New Name
+	for p in plays do if p.uri == "spotify:track:renamed" {
+		testing.expect_value(t, p.track, "New Name")
+	}
+}
+
+@(test)
+test_same_title_under_two_uris_stays_apart_until_merged :: proc(t: ^testing.T) {
+	make_plays :: proc() -> [4]Play {
+		return {
+			mk_uri_play("2020-01-01T12:00:00Z", "Hit", "X", "spotify:track:album"),
+			mk_uri_play("2020-01-02T12:00:00Z", "Hit", "X", "spotify:track:album"),
+			mk_uri_play("2020-01-03T12:00:00Z", "Hit", "X", "spotify:track:compilation"),
+			mk_uri_play("2020-01-04T12:00:00Z", "Hit", "X", "spotify:track:live"),
+		}
+	}
+	plays := make_plays()
 	s := compute_stats(plays[:])
 	testing.expect_value(t, s.unique_tracks, 3)
+	testing.expect_value(t, s.most_played_song.plays, 2) // the album cut alone, not 4
+
+	// An explicit merge by URI joins exactly those two.
+	ov, err := parse_ov(`{"merges":[{"from":{"uri":"spotify:track:compilation"},"into":{"uri":"spotify:track:album"}}]}`)
+	testing.expect_value(t, err, "")
+	tbl := build_identity_table(plays[:], &ov)
+	changed, aerr := apply_overrides(plays[:], ov, tbl)
+	testing.expect_value(t, aerr, "")
+	testing.expect_value(t, changed, 1)
+	s2 := compute_stats(plays[:])
+	testing.expect_value(t, s2.unique_tracks, 2)
+	testing.expect_value(t, s2.most_played_song.plays, 3)
+
+	// Naming a target by artist and title means every URI carrying that text.
+	again := make_plays()
+	ov3, err3 := parse_ov(`{"merges":[{"from":{"uri":"spotify:track:live"},"into":{"artist":"X","title":"Hit"}}]}`)
+	testing.expect_value(t, err3, "")
+	tbl3 := build_identity_table(again[:], &ov3)
+	_, aerr3 := apply_overrides(again[:], ov3, tbl3)
+	testing.expect_value(t, aerr3, "")
+	// "Hit" by X means all three URIs, headed by the most-played (album): one track.
+	testing.expect_value(t, compute_stats(again[:]).unique_tracks, 1)
+	testing.expect_value(t, compute_stats(again[:]).most_played_song.plays, 4)
 }
 
 @(test)
@@ -258,13 +302,13 @@ test_merge_remaps_the_skip_tally :: proc(t: ^testing.T) {
 	}
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	tally_record(&tally, 2020, Track_Key{"Dont Stop", "Band"}, true) // a filtered short play of the old spelling
+	tally_record(&tally, 2020, Track_Key{"Dont Stop", "Band", ""}, .No, 5000) // a filtered short play of the old spelling
 
 	ov, _ := parse_ov(`{"merges":[{"from":{"artist":"Band","title":"Dont Stop"},"into":{"artist":"Band","title":"Don't Stop"}}]}`)
 	tbl := build_identity_table(plays[:], &ov)
 	_, err := apply_overrides(plays[:], ov, tbl, &tally)
 	testing.expect_value(t, err, "")
-	testing.expect_value(t, tally.track_skips[Track_Key{"Don't Stop", "Band"}], 1) // followed the rename
+	testing.expect_value(t, tally.track_skips[Track_Key{"Don't Stop", "Band", ""}], 1) // followed the rename
 	testing.expect_value(t, len(compute_stats(plays[:], &tally).never_skipped), 0)
 }
 

@@ -6,11 +6,27 @@ import "core:testing"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Removes a directory tree. `os.remove_all` fails on nested directories on Linux
+// (EISDIR, leaving files behind), and a stale directory from an earlier run
+// would then change what the next run sees.
+rm_rf :: proc(path: string) {
+	dh, err := os.open(path)
+	if err == nil {
+		infos, _ := os.read_dir(dh, -1, context.temp_allocator)
+		os.close(dh)
+		for e in infos {
+			child := fmt.tprintf("%s/%s", path, e.name)
+			if e.type == .Directory { rm_rf(child) } else { os.remove(child) }
+		}
+	}
+	os.remove(path)
+}
+
 // A fresh data directory per test; tests run in parallel.
 temp_data_dir :: proc(name: string) -> string {
 	base := os.temp_directory(context.temp_allocator) or_else "/tmp"
 	dir := fmt.aprintf("%s/shr_test_%s", base, name)
-	os.remove_all(dir)
+	rm_rf(dir)
 	os.make_directory_all(dir)
 	return dir
 }
@@ -74,7 +90,7 @@ test_parse_annotations_rejects_bad_files :: proc(t: ^testing.T) {
 @(test)
 test_legacy_genre_cache_is_migrated_once :: proc(t: ^testing.T) {
 	dir := temp_data_dir("migrate")
-	defer os.remove_all(dir)
+	defer rm_rf(dir)
 	write_file(fmt.tprintf("%s/.genre_cache.json", dir), `{"A":"Rock","B":"Hip hop","C":"Other","D":"Jazz"}`)
 
 	f, info, err := load_annotations(dir)
@@ -103,7 +119,7 @@ test_legacy_genre_cache_is_migrated_once :: proc(t: ^testing.T) {
 @(test)
 test_unreadable_store_is_an_error_and_left_alone :: proc(t: ^testing.T) {
 	dir := temp_data_dir("unreadable")
-	defer os.remove_all(dir)
+	defer rm_rf(dir)
 	os.make_directory_all(fmt.tprintf("%s/.shr", dir))
 	path := fmt.tprintf("%s/.shr/annotations.json", dir)
 	write_file(path, "{ this is not json")
@@ -119,7 +135,7 @@ test_unreadable_store_is_an_error_and_left_alone :: proc(t: ^testing.T) {
 @(test)
 test_store_round_trips_deterministically :: proc(t: ^testing.T) {
 	dir := temp_data_dir("roundtrip")
-	defer os.remove_all(dir)
+	defer rm_rf(dir)
 	a := ann("Zed \"Q\"", "", "Rock", "llm", "2026-01-02")
 	a.confidence = 0.75
 	a.model = "claude-x@1"

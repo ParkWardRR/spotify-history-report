@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>Turn your Spotify data export into a beautiful, interactive HTML report.</strong><br>
-  No account access needed. Nothing leaves your machine. One binary, zero dependencies.
+  No account access needed. Your listening history is processed locally. One binary, zero dependencies.
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | Section | What you'll see |
 |:--------|:----------------|
 | **Hours per year** | Bar chart of how much you listened, year over year |
-| **Key stats** | Most-played song, worst earworm, longest streak, skip rate |
+| **Key stats** | Most-played song, worst earworm, longest streak, skip rate (explicit skips, with short listens alongside) |
 | **Discovery** | Are you exploring new music or replaying favorites? |
 | **The lifers** | Artists you've listened to every single year |
 | **Top 25 artists** | Horizontal bars ranked by total listening hours |
@@ -53,7 +53,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | **Top albums** | Best albums by total listening time |
 | **Never-skipped** | Songs with 15+ plays and zero skips — pure commitment |
 | **Favourites, obsessions, rediscoveries** | Long-term favourites, what you're bingeing now, and old favourites you've forgotten, as separate lists |
-| **Genre evolution** | Stacked area chart of genre share over time (requires LLM) |
+| **Genre evolution** | Stacked area chart of genre share over time (needs genre annotations; optional LLM enrichment, off by default) |
 | **Heatmap** | When you listen — day of week × hour of day |
 
 ## Quick start
@@ -61,6 +61,8 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 ### 1. Get your data
 
 Go to [spotify.com/account/privacy](https://www.spotify.com/account/privacy/) and request your **Extended Streaming History**. Spotify sends it within a few days as a ZIP containing `Streaming_History_Audio_*.json` files.
+
+> **Which download?** Spotify offers two. The ordinary *Account data* package covers only about the last year and has no track IDs; this tool can't use it and will say so. *Extended streaming history* covers the account's whole lifetime. Both are described in [Spotify's data guide](https://support.spotify.com/us/article/understanding-your-data/).
 
 ### 2. Build the tool
 
@@ -77,27 +79,28 @@ odin build src/ -out:spotify-history-report -o:speed
 ### 3. Run it
 
 ```bash
-./spotify-history-report ~/Downloads/my_spotify_data/
+./spotify-history-report ~/Downloads/my_spotify_data.zip
 ```
 
 That's it. Open `spotify_report.html` in your browser.
 
-### 4. Configure an LLM API key
+The input can be the **ZIP exactly as Spotify sent it**, a folder you extracted it to, or loose `.json` files; give several paths to combine them. Files are recognised by what is inside them, not by name, so renamed or re-zipped exports work and the other JSON in the package (playlists, searches) is ignored. ZIPs are read in memory: nothing is extracted to disk, names that try to escape a folder are never followed, and oversized or implausibly compressed entries are refused.
 
-Genre classification uses an LLM for artists that have no genre yet. Provide an API key via environment variable, CLI flag, or config file:
+The import line tells you what was found: files used and ignored, short listens, non-music rows (podcasts), identical files given twice, and rows repeated across overlapping exports. A repeat *inside* one file is kept, since it can be a real replay. Your `.shr/` notes (overrides, annotations) live in the folder you pointed at, or next to the ZIP.
+
+### 4. Optional: fill in genres with an LLM
+
+The report needs no key. Artists without a genre show up as *Unclassified*, and everything else works. If you want the genre charts filled in, you can opt in to **genre enrichment**, which sends **artist names only** (never plays, timestamps or anything else from your export) to the provider you pick. It is off unless you ask for it:
 
 ```bash
-# Environment variable (easiest)
-ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_data/
+# One run, explicit opt-in
+ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_data/ --enrich
 
-# CLI flag
-./spotify-history-report ~/Downloads/my_spotify_data/ --anthropic-key sk-ant-...
-
-# Interactive config setup (saves to ~/.config/spotify-history-report/config.json)
+# Interactive config setup: saving a key switches enrichment on for every run
 ./spotify-history-report --setup
 ```
 
-Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant.
+Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant. A key that is merely present in your environment is never used without `--enrich` (or a saved `--setup`).
 
 ---
 
@@ -187,16 +190,30 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 
 `scripts/build-release.sh vX.Y.Z` builds the four archives and `SHA256SUMS` into `dist/` — macOS natively, Linux in Ubuntu 22.04 containers (OrbStack or Docker).
 
+### Performance
+
+Measured with `scripts/bench.sh` on generated histories (about 8 years, a few percent short listens, a third of the `skipped` flags null). The whole pipeline, JSON parsing to finished report, single run:
+
+| Rows | JSON on disk | Apple M4 | Intel i7-13700T (Linux, in a container) | Peak memory |
+|-----:|-------------:|---------:|-------:|------------:|
+| 100,000 | 31 MB | 0.7 s | 1.0 s | about 110–150 MB |
+| 500,000 | 156 MB | 3.3 s | 5.3 s | about 370–470 MB |
+| 2,000,000 | 626 MB | 14.6 s | 24.2 s | about 1.4 GB |
+
+Memory grows with the history because each file is read whole. A real Extended Streaming History is typically a few hundred thousand rows. These are the numbers on those two machines, not a promise for yours; run the script to check.
+
 ### How metrics are computed
 
 | Metric | Method |
 |:-------|:-------|
 | Qualifying play | `ms_played >= 30000` and both track + artist present |
-| Session detection | Gap > 30 minutes between consecutive plays |
-| Earworm | Sliding 7-day window per track, report max plays |
+| Session | A run of listening with no more than 30 minutes of idle time. Decided over every music row, short listens included, and measured from each stream's estimated start (Spotify stamps when it *ended*, so start = end − `ms_played`) |
+| Session opener | The first qualifying play of a session |
+| Earworm | Most plays of one song in any window of 7 calendar days that starts at one of its plays (linear two-pointer scan) |
 | Longest streak | Consecutive calendar days with at least one qualifying play |
-| Skip | `skipped: true` or `ms_played < 30000`, counted over every record with a track and artist (including the short plays dropped from the rest of the stats) |
-| Never-skipped | 15+ qualifying plays and not a single skip as defined above |
+| Explicit skip | Spotify's own `skipped: true`, as a share of the rows that carry the flag. Current exports often leave it `null`; those rows are *unknown*, not "not skipped", and a year with no flags shows no explicit rate at all |
+| Short listen | `ms_played < 30000`, as a share of all music rows (including the ones dropped from the rest of the stats). Reported separately from explicit skips and never added to them |
+| Never-skipped | 15+ qualifying plays with no explicit skip and no short listen of that song |
 | Loyalty | Artist has qualifying plays in every active year |
 | Heatmap | Hours summed per (day-of-week, hour-of-day) bucket, in your timezone |
 | Explore vs. obsess | Per year: % of time on top-10 all-time artists / other artists new that year / the rest (disjoint; a new artist who is also top-10 counts as top-10) |
@@ -235,7 +252,7 @@ Every play is matched to a Spotify track URI from your export, and the tool is e
 - **Text only** — records without a URI are kept by exact title + artist and reported as unresolved.
 - **Nothing is merged on fuzzy evidence.** Songs that differ only in case or punctuation (`Don't Stop` / `Dont Stop`) are listed as *near-duplicates* to review; songs that share a base title but are different versions (`Live`, `Remastered`, `Instrumental`, `Karaoke`, `Acoustic`, `Demo`, `Edit`, `Remix`, `Mono`/`Stereo`) are listed as *version families* and are never proposed as one recording. Accents are not folded either.
 
-The report counts a *song* as exact title + artist text, so one song released on an album and a compilation (two URIs) counts once, while a URI whose track was renamed counts under each spelling.
+**The report counts a URI as one track.** The same title on an album and on a compilation is two URIs and therefore two tracks, because "same title" is not "same recording" (live takes, remasters and re-recordings can share one). A URI whose catalogue entry was renamed over the years is one track under its most-played spelling. `--identities` lists every title that appears under several URIs, with a ready-to-paste merge line, so a favourite that looks under-counted is one edit away from being joined.
 
 ```bash
 ./spotify-history-report ~/Downloads/my_spotify_data/ --identities   # coverage + review list, no LLM needed
@@ -257,7 +274,7 @@ This also writes `.shr/identities.json` next to your data (a derived cache; safe
 }
 ```
 
-A reference is either a `uri` or both `artist` and `title`. Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
+A reference is either a `uri` (exactly that URI) or both `artist` and `title` (every URI carrying that text; as the `into` side it stands for the most-played of them and pulls the others in). Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 
 ## Genre classification
 
@@ -276,7 +293,7 @@ Three rules keep it honest:
 - **You always win.** Decisions in `.shr/overrides.json` beat every other source, at artist or track level, and a later LLM run can never replace them. Among the other sources a more specific track-level annotation beats an artist-level one; for the same target the most recent observation of the same source wins.
 - **An unreadable store is never overwritten.** If `.shr/annotations.json` is damaged the run stops and says so.
 
-When an LLM key is available the tool sends your artist names (never your listening history) in batches of 150 and asks for one of 14 genres: Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other. It only asks about artists that have no genre yet, so reruns and new exports cost nothing for what is already known. **If every artist already has a genre, no key is needed at all.**
+When enrichment is on (`--enrich`, or a key saved by `--setup`) the tool sends your artist names (never your listening history) in batches of 150 and asks for one of 14 genres: Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other. It only asks about artists that have no genre yet, so reruns and new exports cost nothing for what is already known. **Without `--enrich`, nothing is sent and unannotated artists stay *Unclassified*.**
 
 ```bash
 ./spotify-history-report ~/Downloads/my_spotify_data/ --annotations   # coverage + biggest gaps, no LLM
@@ -317,7 +334,7 @@ playlist ordering.
 
 ## Privacy
 
-- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API — and those only send artist names, not your listening history.
+- **Your listening history is processed locally.** The tool reads local JSON files and writes a local HTML file. Optional genre enrichment sends artist names to the provider you choose. Enrichment is off by default, and it is the only network call the tool ever makes.
 - **The HTML report is self-contained.** No analytics, no external requests, no tracking pixels. Open it offline.
 - **The sample data uses fictional artists.** No real listening history is included in this repository.
 
