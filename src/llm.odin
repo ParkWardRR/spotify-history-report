@@ -10,6 +10,19 @@ GENRE_LIST :: `Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jaz
 
 BATCH_SIZE :: 150
 
+// The provider's own message for the last request that returned no answer (an
+// invalid model id, a bad key, a rate limit), so a failed enrichment says why
+// instead of looking like "nothing to classify". Never contains the key: it is
+// the provider's response text, not our request.
+llm_last_error: string
+
+// Pulls the provider's error text out of a response that carries no answer.
+note_llm_failure :: proc(resp: string) {
+	msg := extract_json_string(resp, "\"message\"")
+	if len(msg) == 0 do msg = "no answer in the response"
+	llm_last_error = msg
+}
+
 classify_artists_llm :: proc(
 	artists: []string,
 	provider: LLM_Provider,
@@ -142,12 +155,17 @@ curl_post :: proc(url: string, auth_header: string, body: string) -> string {
 	libc.system(cmd_cstr)
 
 	data, err := os.read_entire_file(resp_path, context.allocator)
-	if err != nil do return ""
+	if err != nil {
+		llm_last_error = "no response (is curl installed and the network reachable?)"
+		return ""
+	}
 	defer delete(data)
 
 	// Extract content from OpenAI-style response
 	resp_str := string(data)
-	return extract_openai_content(resp_str)
+	content := extract_openai_content(resp_str)
+	if len(content) == 0 do note_llm_failure(resp_str)
+	return content
 }
 
 curl_post_anthropic :: proc(key: string, body: string) -> string {
@@ -165,10 +183,15 @@ curl_post_anthropic :: proc(key: string, body: string) -> string {
 	libc.system(cmd_cstr)
 
 	data, err := os.read_entire_file(resp_path, context.allocator)
-	if err != nil do return ""
+	if err != nil {
+		llm_last_error = "no response (is curl installed and the network reachable?)"
+		return ""
+	}
 	defer delete(data)
 
-	return extract_anthropic_content(string(data))
+	content := extract_anthropic_content(string(data))
+	if len(content) == 0 do note_llm_failure(string(data))
+	return content
 }
 
 extract_openai_content :: proc(resp: string) -> string {

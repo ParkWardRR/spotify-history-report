@@ -330,7 +330,7 @@ The genre data powers a stacked area chart in the report showing how your listen
 |:---------|:--------------|:-----------------|
 | Anthropic | `claude-sonnet-4-20250514` | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | OpenAI | `gpt-4o-mini` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| OpenRouter | `anthropic/claude-sonnet-4-20250514` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| OpenRouter | `anthropic/claude-sonnet-5.5` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
 Priority: Anthropic > OpenAI > OpenRouter (auto-detected from env vars or config).
 

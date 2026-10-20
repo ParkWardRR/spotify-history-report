@@ -130,7 +130,7 @@ resolve_provider :: proc(cfg: Config) -> (LLM_Provider, string, string) {
 		}
 	case "openrouter":
 		if len(orr) > 0 {
-			if len(model) == 0 do model = "anthropic/claude-sonnet-4-20250514"
+			if len(model) == 0 do model = "anthropic/claude-sonnet-5.5"
 			return .OpenRouter, orr, model
 		}
 	}
@@ -145,7 +145,7 @@ resolve_provider :: proc(cfg: Config) -> (LLM_Provider, string, string) {
 		return .OpenAI, oai, model
 	}
 	if len(orr) > 0 {
-		if len(model) == 0 do model = "anthropic/claude-sonnet-4-20250514"
+		if len(model) == 0 do model = "anthropic/claude-sonnet-5.5"
 		return .OpenRouter, orr, model
 	}
 

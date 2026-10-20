@@ -372,6 +372,9 @@ run_pipeline :: proc(o: Run_Opts) {
 	if existing > 0 && added == 0 do detail = fmt.aprintf("%s artists annotated (stored)", fmt_int(existing))
 	if added > 0 do detail = fmt.aprintf("%s from storage · %s new via %s", fmt_int(existing), fmt_int(added), provider_name(o.provider))
 	if len(artist_list) > added do detail = fmt.aprintf("%s · %s unclassified", detail, fmt_int(len(artist_list) - added))
+	if can_enrich && added == 0 && len(artist_list) > 0 && len(llm_last_error) > 0 {
+		detail = fmt.aprintf("%s · the provider said: %s", detail, llm_last_error)
+	}
 	if len(artist_list) > 0 && !can_enrich {
 		// Never a failure: the core report needs no genres, and Unclassified is a result.
 		detail = fmt.aprintf("%s · enrichment off, nothing sent anywhere", detail)

@@ -394,3 +394,11 @@ test_report_json_carries_genre_artists :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(html, `"genre_artists":[{"genre":"Rock"`))
 	testing.expect(t, strings.contains(html, `{"name":"Big","hours":`))
 }
+
+@(test)
+test_a_failed_llm_request_keeps_the_providers_reason :: proc(t: ^testing.T) {
+	note_llm_failure(`{"error":{"message":"anthropic/x is not a valid model ID","code":400},"user_id":"u"}`)
+	testing.expect_value(t, llm_last_error, "anthropic/x is not a valid model ID")
+	note_llm_failure(`{}`)
+	testing.expect(t, len(llm_last_error) > 0) // never blank: a failure always says something
+}
