@@ -24,6 +24,14 @@ Streaming_Record :: struct {
 	conn_country:                      Maybe(string),
 }
 
+// The export's `skipped` field is true, false, or null (current exports leave it
+// null for most rows). Null is not the same as false, so it is kept apart.
+Skip_Flag :: enum u8 {
+	Unknown,
+	No,
+	Yes,
+}
+
 Play :: struct {
 	year:     int,
 	month:    int,
@@ -38,7 +46,7 @@ Play :: struct {
 	artist:   string,
 	album:    string,
 	platform: string,
-	skipped:  bool,
+	skipped:  Skip_Flag, // as exported; Unknown when Spotify left it null
 	ts_raw:   string,
 	// Identity and context from the export (empty when absent).
 	uri:          string, // spotify:track:<id>
@@ -47,6 +55,10 @@ Play :: struct {
 	conn_country: string,
 	shuffle:      bool,
 	offline:      bool,
+	// Set by assign_sessions from the whole event stream; 0 = not assigned yet.
+	session:        int,
+	opens_session:  bool, // first qualifying play of its session
+	closes_session: bool, // last qualifying play of its session
 }
 
 Stats :: struct {
@@ -75,8 +87,11 @@ Stats :: struct {
 	longest_streak:     int,
 	heatmap:            [dynamic]JSON_HM,
 	explore_obsess:     [dynamic]JSON_Explore,
-	skip_rate_first:    int,
+	skip_rate_first:    int, // explicit skips, % of rows with the flag; -1 = no flagged rows
 	skip_rate_last:     int,
+	short_rate_first:   int, // listens under 30 s, % of music rows
+	short_rate_last:    int,
+	skip_flag_coverage: int, // % of music rows whose `skipped` field was present
 	skip_rate_first_yr: int,
 	skip_rate_last_yr:  int,
 	avg_len_first:      f64,
@@ -229,7 +244,7 @@ record_to_play :: proc(rec: Streaming_Record, c: ^Clock) -> (p: Play, status: Re
 		artist       = artist,
 		album        = rec.master_metadata_album_album_name.? or_else "",
 		platform     = rec.platform.? or_else "",
-		skipped      = rec.skipped.? or_else false,
+		skipped      = skip_flag(rec.skipped),
 		ts_raw       = rec.ts,
 		uri          = rec.spotify_track_uri.? or_else "",
 		reason_start = rec.reason_start.? or_else "",
@@ -244,10 +259,15 @@ qualifies :: proc(p: Play) -> bool {
 	return p.ms >= MIN_PLAY_MS
 }
 
-// A skip is an explicit `skipped` flag or a play cut off before MIN_PLAY_MS.
-is_skip :: proc(p: Play) -> bool {
-	return p.skipped || p.ms < MIN_PLAY_MS
+skip_flag :: proc(v: Maybe(bool)) -> Skip_Flag {
+	if b, ok := v.?; ok do return .Yes if b else .No
+	return .Unknown
 }
+
+// Two different observations, reported separately and never added together:
+// Spotify flagging the row as skipped, and the play ending before MIN_PLAY_MS.
+explicit_skip :: proc(p: Play) -> bool { return p.skipped == .Yes }
+short_listen :: proc(p: Play) -> bool { return p.ms < MIN_PLAY_MS }
 
 // Chronological order; ties keep file order so output is reproducible.
 sort_plays :: proc(plays: []Play) {

@@ -640,12 +640,16 @@ const GENRE_COLORS = DATA.genre_colors || {};
 
   // ─── Stats row 1 ─────────────────────────────────────────
   const sr1 = document.getElementById('stats-row-1');
-  const skipLabel = D.skip_rate_first_yr && D.skip_rate_last_yr
-    ? `songs skipped within 30 seconds, ${D.skip_rate_first_yr} vs. ${D.skip_rate_last_yr}`
-    : 'skip rate trend';
-  const skipVal = (D.skip_rate_first != null && D.skip_rate_last != null)
-    ? `${D.skip_rate_first}% → ${D.skip_rate_last}%`
-    : '—';
+  // Explicit skips (Spotify's own flag) and short listens (under 30 s) are two
+  // different observations. Current exports often leave the flag null.
+  const haveSkips = D.skip_rate_first != null && D.skip_rate_last != null;
+  const yrs = `${D.skip_rate_first_yr} vs. ${D.skip_rate_last_yr}`;
+  const skipVal = haveSkips
+    ? `${D.skip_rate_first}% → ${D.skip_rate_last}%`
+    : (D.short_rate_first != null ? `${D.short_rate_first}% → ${D.short_rate_last}%` : '—');
+  const skipLabel = haveSkips
+    ? `of plays Spotify marked as skipped, ${yrs}. Listens under 30 seconds: ${D.short_rate_first}% → ${D.short_rate_last}%`
+    : `of listens ended before 30 seconds, ${yrs}. Spotify's skipped flag is missing for ${100 - (D.skip_flag_coverage || 0)}% of your history, so explicit skips can't be reported`;
   const stats1 = [
     { value: D.most_played_song?.plays || '—',
       label: `plays of one song: “${D.most_played_song?.track || '?'}” by ${D.most_played_song?.artist || '?'}` },

@@ -258,7 +258,7 @@ test_merge_remaps_the_skip_tally :: proc(t: ^testing.T) {
 	}
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	tally_record(&tally, 2020, Track_Key{"Dont Stop", "Band"}, true) // a filtered short play of the old spelling
+	tally_record(&tally, 2020, Track_Key{"Dont Stop", "Band"}, .No, 5000) // a filtered short play of the old spelling
 
 	ov, _ := parse_ov(`{"merges":[{"from":{"artist":"Band","title":"Dont Stop"},"into":{"artist":"Band","title":"Don't Stop"}}]}`)
 	tbl := build_identity_table(plays[:], &ov)

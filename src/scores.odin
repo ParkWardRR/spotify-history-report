@@ -115,6 +115,7 @@ Track_Hist :: struct {
 // One pass over chronologically sorted plays. Returns histories in order of
 // first play, which is deterministic.
 build_histories :: proc(plays: []Play) -> [dynamic]Track_Hist {
+	ensure_sessions(plays)
 	hists: [dynamic]Track_Hist
 	index: map[Track_Key]int
 	defer delete(index)
@@ -135,8 +136,8 @@ build_histories :: proc(plays: []Play) -> [dynamic]Track_Hist {
 			h.score.months_active += 1
 			h.last_month = m
 		}
-		if i == 0 || p.unix - plays[i - 1].unix > SESSION_GAP_SECONDS do h.score.openers += 1
-		if i == len(plays) - 1 || plays[i + 1].unix - p.unix > SESSION_GAP_SECONDS do h.score.closers += 1
+		if p.opens_session do h.score.openers += 1
+		if p.closes_session do h.score.closers += 1
 	}
 	return hists
 }

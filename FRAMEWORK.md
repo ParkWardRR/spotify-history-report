@@ -39,10 +39,10 @@ The LLM receives Spotify Extended Streaming History JSON files (GDPR export). Ea
 | Most played song | Max count of (track, artist) |
 | Earworm detection | Sliding 7-day window per track, report max plays in any window |
 | Longest streak | Consecutive calendar days (configured timezone) with ≥1 play |
-| Skip rate trend | % of records (with a track and artist) that have `ms_played < 30000` or `skipped: true`, by year; short plays count here even though they are not qualifying plays |
-| Session detection | Gap > 30 minutes between consecutive plays = new session |
-| Session openers | First track in each session, ranked by frequency |
-| Never-skipped songs | ≥15 total plays, 0 plays under 30 seconds |
+| Skip rate trend | Two measures, never combined: **explicit skips** (`skipped: true`, as a share of rows where the field is not null; null is unknown, not false) and **short listens** (`ms_played < 30000`, as a share of all rows with a track and artist) |
+| Session detection | Over every music row, short listens included, sorted by end time. A row starts at `ts − ms_played`; more than 30 minutes between that start and the latest end so far = new session |
+| Session openers | First qualifying play in each session, ranked by frequency |
+| Never-skipped songs | ≥15 total plays, no explicit skip and no play under 30 seconds |
 
 ### Layer 3: Temporal analysis
 

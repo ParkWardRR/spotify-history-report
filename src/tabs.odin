@@ -169,7 +169,10 @@ build_overview :: proc(s: ^Stats, cw: int) -> string {
 		append(&out, kv_line("Biggest day", fmt.tprintf("%s · %d plays · %.1fh", bd.date, bd.plays, bd.hours), NORD13))
 	}
 	if s.skip_rate_first_yr > 0 {
-		append(&out, kv_line("Skip rate", fmt.tprintf("%d%% (%d) → %d%% (%d)", s.skip_rate_first, s.skip_rate_first_yr, s.skip_rate_last, s.skip_rate_last_yr), NORD14))
+		if s.skip_rate_first >= 0 && s.skip_rate_last >= 0 {
+			append(&out, kv_line("Explicit skips", fmt.tprintf("%d%% (%d) → %d%% (%d)", s.skip_rate_first, s.skip_rate_first_yr, s.skip_rate_last, s.skip_rate_last_yr), NORD14))
+		}
+		append(&out, kv_line("Short listens", fmt.tprintf("%d%% (%d) → %d%% (%d) under 30 s", s.short_rate_first, s.skip_rate_first_yr, s.short_rate_last, s.skip_rate_last_yr), NORD14))
 	}
 	if s.avg_len_first_yr > 0 {
 		append(&out, kv_line("Track length", fmt.tprintf("%.1f min (%d) → %.1f min (%d)", s.avg_len_first, s.avg_len_first_yr, s.avg_len_last, s.avg_len_last_yr), NORD7))

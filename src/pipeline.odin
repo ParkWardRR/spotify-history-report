@@ -106,6 +106,8 @@ Load_Result :: struct {
 load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r: Load_Result, ok: bool) {
 	seen_files: map[u64]bool
 	seen_rows: map[u64]int // row fingerprint → index of the file it first appeared in
+	events: [dynamic]Session_Event // every music row, for sessions
+	defer delete(events)
 	defer { delete(seen_files); delete(seen_rows) }
 
 	for e, fi in entries {
@@ -155,9 +157,15 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 			}
 			seen_rows[row] = fi
 			r.summary.music_events += 1
-			tally_record(&r.tally, play.year, play_key(play), is_skip(play))
-			if qualifies(play) do append(&r.plays, play)
-			else do r.summary.short_listens += 1
+			tally_record(&r.tally, play.year, play_key(play), play.skipped, play.ms)
+			slot := -1
+			if qualifies(play) {
+				slot = len(r.plays)
+				append(&r.plays, play)
+			} else {
+				r.summary.short_listens += 1
+			}
+			append(&events, Session_Event{play.unix, play.ms, slot})
 		}
 		delete(records)
 		if progress do stage_msg(.Load, .Active, e.name, fi + 1, len(entries))
@@ -168,6 +176,7 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 		r.err, r.hint = no_history_message(entries, r.summary)
 		return r, false
 	}
+	assign_sessions(events[:], r.plays[:]) // before sorting: slots index the load order
 	sort_plays(r.plays[:])
 	return r, true
 }

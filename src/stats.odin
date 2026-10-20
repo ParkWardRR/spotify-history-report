@@ -19,25 +19,51 @@ play_key :: proc(p: Play) -> Track_Key {
 	return track_key(p.track, p.artist, p.uri)
 }
 
-// Skips are defined over every record with a track and artist, including the
-// sub-30-second ones the pipeline drops from `plays`: a skip is `skipped: true`
-// or `ms_played < 30000`. Filled while loading, before that filter runs.
+// Skipping is tracked over every record with a track and artist, including the
+// sub-30-second ones the pipeline drops from `plays`. Two separate things are
+// counted: rows Spotify flagged `skipped: true`, and short listens (under 30 s).
+// Rows whose flag is null are counted as unflagged, never as "not skipped", so
+// the explicit-skip rate is taken over flagged rows only. Filled while loading.
 Skip_Tally :: struct {
-	year_total:  map[int]int,
-	year_skips:  map[int]int,
-	track_skips: map[Track_Key]int,
+	year_total:    map[int]int, // music rows
+	year_flagged:  map[int]int, // rows whose `skipped` field was present
+	year_explicit: map[int]int, // flagged rows with skipped = true
+	year_short:    map[int]int, // rows under MIN_PLAY_MS
+	track_skips:   map[Track_Key]int, // rows that are either, for never-skipped
 }
 
-tally_record :: proc(t: ^Skip_Tally, year: int, key: Track_Key, skip: bool) {
+tally_record :: proc(t: ^Skip_Tally, year: int, key: Track_Key, flag: Skip_Flag, ms: i64) {
 	t.year_total[year] += 1
-	if skip {
-		t.year_skips[year] += 1
-		t.track_skips[key] += 1
-	}
+	if flag != .Unknown do t.year_flagged[year] += 1
+	explicit := flag == .Yes
+	short := ms < MIN_PLAY_MS
+	if explicit do t.year_explicit[year] += 1
+	if short do t.year_short[year] += 1
+	if explicit || short do t.track_skips[key] += 1
 }
 
 skip_tally_destroy :: proc(t: ^Skip_Tally) {
-	delete(t.year_total); delete(t.year_skips); delete(t.track_skips)
+	delete(t.year_total); delete(t.year_flagged); delete(t.year_explicit); delete(t.year_short); delete(t.track_skips)
+}
+
+EARWORM_DAYS :: 7
+
+// The most plays that fit in a window of `days` calendar days starting at one of
+// the plays, and where the first such window starts. `ords` are day numbers in
+// ascending order. A window starting at ords[i] covers ords[i] ..< ords[i]+days.
+// Both ends only move forward, so this is linear instead of rescanning from
+// every play.
+densest_window :: proc(ords: []i64, days: i64) -> (best_count, best_idx: int) {
+	j := 0
+	for i in 0 ..< len(ords) {
+		if j < i do j = i
+		for j < len(ords) && ords[j] - ords[i] < days do j += 1
+		if j - i > best_count {
+			best_count = j - i
+			best_idx = i
+		}
+	}
+	return
 }
 
 // True if `a` ranks before `b`: higher count first, then artist and track name
@@ -113,16 +139,12 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 		}
 	}
 
-	// Session openers (gap > 30 min)
+	// Session openers: the first play of each session (see sessions.odin).
 	opener_count: map[Track_Key]int
 	defer delete(opener_count)
-	if len(plays) > 0 {
-		opener_count[play_key(plays[0])] += 1
-		for i in 1..<len(plays) {
-			if plays[i].unix - plays[i-1].unix > 1800 {
-				opener_count[play_key(plays[i])] += 1
-			}
-		}
+	ensure_sessions(plays)
+	for &p in plays {
+		if p.opens_session do opener_count[play_key(p)] += 1
 	}
 	stats.session_openers = top_n_openers(opener_count, 10)
 
@@ -134,7 +156,7 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 	for &p in plays {
 		k := play_key(p)
 		track_total[k] += 1
-		if p.skipped { track_skips[k] += 1 }
+		if explicit_skip(p) || short_listen(p) { track_skips[k] += 1 }
 	}
 	ns: [dynamic]Track_Stat
 	defer delete(ns)
@@ -369,24 +391,9 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 			if len(days) < 5 do continue
 			slice.stable_sort_by(days[:], proc(a, b: Day_Play) -> bool { return a.ordinal < b.ordinal })
 
-			best_count := 0
-			best_idx := 0
-
-			// For each play, count the plays that fall within 7 days of it
-			for i in 0..<len(days) {
-				count := 0
-				for j in i..<len(days) {
-					if days[j].ordinal - days[i].ordinal < 7 {
-						count += 1
-					} else {
-						break
-					}
-				}
-				if count > best_count {
-					best_count = count
-					best_idx = i
-				}
-			}
+			ords := make([]i64, len(days), context.temp_allocator)
+			for d, i in days do ords[i] = d.ordinal
+			best_count, best_idx := densest_window(ords, EARWORM_DAYS)
 
 			if best_count >= 5 {
 				month_names := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
@@ -411,31 +418,44 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 		}
 	}
 
-	// Skip rate per year (first and last years). Counted over every record with
-	// a track and artist (see Skip_Tally), falling back to the qualifying plays'
-	// own `skipped` flag when no tally was supplied.
+	// Skip rates for the first and last year. Explicit skips are a share of the
+	// rows that carry the flag (-1 when none do); short listens are a share of all
+	// music rows. With no tally the qualifying plays stand in (so no short ones).
 	if len(years) > 0 {
 		first_yr := years[0]
 		last_yr := years[len(years) - 1]
 
-		rate :: proc(plays: []Play, tally: ^Skip_Tally, yr: int) -> int {
-			total, skipped := 0, 0
+		Rates :: struct { explicit_pct, short_pct, flagged, total: int }
+		rates :: proc(plays: []Play, tally: ^Skip_Tally, yr: int) -> (r: Rates) {
+			explicit := 0
 			if tally != nil {
-				total, skipped = tally.year_total[yr], tally.year_skips[yr]
+				r.total, r.flagged, explicit = tally.year_total[yr], tally.year_flagged[yr], tally.year_explicit[yr]
+				if r.total > 0 do r.short_pct = tally.year_short[yr] * 100 / r.total
 			} else {
 				for &p in plays {
 					if p.year != yr do continue
-					total += 1
-					if p.skipped do skipped += 1
+					r.total += 1
+					if p.skipped != .Unknown do r.flagged += 1
+					if explicit_skip(p) do explicit += 1
 				}
 			}
-			return skipped * 100 / total if total > 0 else 0
+			r.explicit_pct = explicit * 100 / r.flagged if r.flagged > 0 else -1
+			return
 		}
 
 		stats.skip_rate_first_yr = first_yr
 		stats.skip_rate_last_yr = last_yr
-		stats.skip_rate_first = rate(plays, tally, first_yr)
-		stats.skip_rate_last = rate(plays, tally, last_yr)
+		f, l := rates(plays, tally, first_yr), rates(plays, tally, last_yr)
+		stats.skip_rate_first, stats.skip_rate_last = f.explicit_pct, l.explicit_pct
+		stats.short_rate_first, stats.short_rate_last = f.short_pct, l.short_pct
+
+		total_rows, flagged_rows := 0, 0
+		for y in years {
+			r := rates(plays, tally, y)
+			total_rows += r.total
+			flagged_rows += r.flagged
+		}
+		stats.skip_flag_coverage = flagged_rows * 100 / total_rows if total_rows > 0 else 0
 	}
 
 	// Average track length per year

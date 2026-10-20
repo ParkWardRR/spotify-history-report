@@ -68,8 +68,15 @@ report_json :: proc(s: Stats) -> string {
 	w(&j, "},")
 
 	// Skip rate
-	wf(&j, "\"skip_rate_first\":%d,", s.skip_rate_first)
-	wf(&j, "\"skip_rate_last\":%d,", s.skip_rate_last)
+	// Explicit skips are null for a year where Spotify left the flag out.
+	pct_or_null :: proc(b: ^strings.Builder, key: string, v: int) {
+		if v < 0 { strings.write_string(b, fmt.tprintf("\"%s\":null,", key)) } else { strings.write_string(b, fmt.tprintf("\"%s\":%d,", key, v)) }
+	}
+	pct_or_null(&j, "skip_rate_first", s.skip_rate_first)
+	pct_or_null(&j, "skip_rate_last", s.skip_rate_last)
+	wf(&j, "\"short_rate_first\":%d,", s.short_rate_first)
+	wf(&j, "\"short_rate_last\":%d,", s.short_rate_last)
+	wf(&j, "\"skip_flag_coverage\":%d,", s.skip_flag_coverage)
 	wf(&j, "\"skip_rate_first_yr\":%d,", s.skip_rate_first_yr)
 	wf(&j, "\"skip_rate_last_yr\":%d,", s.skip_rate_last_yr)
 

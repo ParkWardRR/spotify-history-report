@@ -44,7 +44,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | Section | What you'll see |
 |:--------|:----------------|
 | **Hours per year** | Bar chart of how much you listened, year over year |
-| **Key stats** | Most-played song, worst earworm, longest streak, skip rate |
+| **Key stats** | Most-played song, worst earworm, longest streak, skip rate (explicit skips, with short listens alongside) |
 | **Discovery** | Are you exploring new music or replaying favorites? |
 | **The lifers** | Artists you've listened to every single year |
 | **Top 25 artists** | Horizontal bars ranked by total listening hours |
@@ -195,11 +195,13 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 | Metric | Method |
 |:-------|:-------|
 | Qualifying play | `ms_played >= 30000` and both track + artist present |
-| Session detection | Gap > 30 minutes between consecutive plays |
-| Earworm | Sliding 7-day window per track, report max plays |
+| Session | A run of listening with no more than 30 minutes of idle time. Decided over every music row, short listens included, and measured from each stream's estimated start (Spotify stamps when it *ended*, so start = end − `ms_played`) |
+| Session opener | The first qualifying play of a session |
+| Earworm | Most plays of one song in any window of 7 calendar days that starts at one of its plays (linear two-pointer scan) |
 | Longest streak | Consecutive calendar days with at least one qualifying play |
-| Skip | `skipped: true` or `ms_played < 30000`, counted over every record with a track and artist (including the short plays dropped from the rest of the stats) |
-| Never-skipped | 15+ qualifying plays and not a single skip as defined above |
+| Explicit skip | Spotify's own `skipped: true`, as a share of the rows that carry the flag. Current exports often leave it `null`; those rows are *unknown*, not "not skipped", and a year with no flags shows no explicit rate at all |
+| Short listen | `ms_played < 30000`, as a share of all music rows (including the ones dropped from the rest of the stats). Reported separately from explicit skips and never added to them |
+| Never-skipped | 15+ qualifying plays with no explicit skip and no short listen of that song |
 | Loyalty | Artist has qualifying plays in every active year |
 | Heatmap | Hours summed per (day-of-week, hour-of-day) bucket, in your timezone |
 | Explore vs. obsess | Per year: % of time on top-10 all-time artists / other artists new that year / the rest (disjoint; a new artist who is also top-10 counts as top-10) |
