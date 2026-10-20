@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        env:
+          ODIN_TAG: dev-2026-09
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq clang llvm lld libc6-dev tzdata curl ca-certificates python3 >/dev/null
+          mkdir -p /opt/odin
+          curl -fsSL "https://github.com/odin-lang/Odin/releases/download/$ODIN_TAG/odin-linux-amd64-$ODIN_TAG.tar.gz" \
+            | tar xz -C /opt/odin --strip-components=1
+          echo /opt/odin >> "$GITHUB_PATH"
+
+      - name: Build
+        run: odin build src -out:spotify-history-report -o:speed
+
+      - name: Test
+        run: odin test src -define:ODIN_TEST_TRACK_MEMORY=false
+
+      - name: Smoke test on the sample export
+        run: scripts/smoke.sh ./spotify-history-report

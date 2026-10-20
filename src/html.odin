@@ -170,8 +170,11 @@ report_json :: proc(s: Stats) -> string {
 	w(&j, "],")
 
 	w(&j, "\"genre_colors\":{")
+	// In genre_order, not map order: map iteration varies between processes.
 	gi := 0
-	for g, c in s.genre_colors {
+	for g in s.genre_order {
+		c, has := s.genre_colors[g]
+		if !has do continue
 		if gi > 0 do w(&j, ",")
 		wf(&j, "\"%s\":\"%s\"", esc(g), c)
 		gi += 1
