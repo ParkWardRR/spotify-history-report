@@ -6,3 +6,5 @@ spotify-history-report
 .DS_Store
 dist/
 .shr/
+tools/thunderblird/thunderblird
+tools/thunderblird/*.db
