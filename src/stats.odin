@@ -638,6 +638,13 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, r: ^Genre_Resolver) {
 	for s in Annotation_Source do stats.genre_source_pct[s] = f64(source_ms[s]) / f64(max(total_ms, 1)) * 100
 	stats.genre_user_targets = r.user_artists + r.user_tracks
 
+	// Store artist-level genre for the report per-genre artist bars.
+	for &a in stats.top_artists {
+		if pick, ok := resolve_genre(r, "", a.name); ok {
+			stats.artist_genres[a.name] = pick.genre
+		}
+	}
+
 	// "Unclassified" is a series of its own, and only when there is something in it.
 	if unknown_ms > 0 {
 		append(&stats.genre_order, UNCLASSIFIED)

@@ -97,6 +97,7 @@ Stats :: struct {
 	genre_unclassified_pct: f64, // share of listening time with no genre annotation
 	genre_source_pct:   [Annotation_Source]f64, // share of listening time decided by each source
 	genre_user_targets: int,    // artists and tracks the user classified
+	artist_genres:      map[string]string, // artist name -> genre, for the report per-genre artist bars
 	// Coverage: the span of local days the data covers, for completeness checks.
 	first_ordinal:      i64,
 	last_ordinal:       i64,

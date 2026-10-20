@@ -212,6 +212,18 @@ report_json :: proc(s: Stats) -> string {
 	}
 	w(&j, "},")
 
+	// Artist-level genre map (for per-genre artist bars)
+	w(&j, "\"artist_genres\":{")
+	ai := 0
+	for &a in s.top_artists {
+		g, has := s.artist_genres[a.name]
+		if !has do continue
+		if ai > 0 do w(&j, ",")
+		wf(&j, "\"%s\":\"%s\"", esc(a.name), esc(g))
+		ai += 1
+	}
+	w(&j, "},")
+
 	w(&j, "\"genre_area\":[")
 	for &gq, qi in s.genre_area {
 		if qi > 0 do w(&j, ",")
