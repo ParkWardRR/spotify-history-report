@@ -1,7 +1,15 @@
+// thunderblird classifies the artists in a Spotify export by their Last.fm top
+// tags and writes the answers as `lastfm` annotations into the report's
+// .shr/annotations.json, next to whatever is already there.
+//
+// It is optional and opt-in: the report works without it. The only data it
+// sends is artist names (never plays, times or counts), and `-dry-run` shows
+// exactly how many before anything leaves the machine.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,31 +26,33 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-var apiKey string
+// apiBase is a variable so tests can point it at a local server.
+var apiBase = "https://ws.audioscrobbler.com/2.0/"
 
 var (
 	bucketArtists = []byte("artists")
-	bucketMeta    = []byte("meta")
+
+	errRateLimited = errors.New("rate limited")
+	errNotFound    = errors.New("artist not found")
 )
 
-type SpotifyRecord struct {
+type spotifyRecord struct {
 	Artist   string `json:"master_metadata_album_artist_name"`
-	Track    string `json:"master_metadata_track_name"`
-	Album    string `json:"master_metadata_album_album_name"`
 	MsPlayed int64  `json:"ms_played"`
-	TS       string `json:"ts"`
 }
 
-type ArtistEntry struct {
+// cacheEntry is what a finished Last.fm lookup leaves in the bbolt cache. An
+// empty Genre means "asked, and nothing the tag table understands came back":
+// it is remembered so reruns don't ask again, but it is never written out as
+// an annotation. Lookups that failed are not cached at all.
+type cacheEntry struct {
 	Name      string   `json:"name"`
 	Genre     string   `json:"genre"`
 	Tags      []string `json:"tags"`
-	Hours     float64  `json:"hours"`
 	QueryTime int64    `json:"query_time"`
-	Source    string   `json:"source"`
 }
 
-type LastFMResponse struct {
+type lastfmResponse struct {
 	TopTags struct {
 		Tag []struct {
 			Name  string `json:"name"`
@@ -54,213 +63,39 @@ type LastFMResponse struct {
 	Message string `json:"message"`
 }
 
-// Annotation represents a single genre annotation in the .shr/annotations.json format.
-type Annotation struct {
-	Artist     string  `json:"artist"`
-	Title      string  `json:"title"`
-	Namespace  string  `json:"namespace"`
-	Value      string  `json:"value"`
-	Source     string  `json:"source"`
-	Model      string  `json:"model"`
-	Confidence *string `json:"confidence"`
-	Observed   string  `json:"observed"`
-}
-
-// AnnotationsFile is the top-level structure for annotations.json output.
-type AnnotationsFile struct {
-	SchemaVersion int          `json:"schema_version"`
-	Annotations   []Annotation `json:"annotations"`
-}
-
-var tagToGenre = map[string]string{
-	// Hip-hop & Rap
-	"hip-hop": "Hip-hop & Rap", "hip hop": "Hip-hop & Rap", "rap": "Hip-hop & Rap",
-	"trap": "Hip-hop & Rap", "southern hip hop": "Hip-hop & Rap", "gangsta rap": "Hip-hop & Rap",
-	"underground hip-hop": "Hip-hop & Rap", "east coast hip hop": "Hip-hop & Rap",
-	"west coast hip hop": "Hip-hop & Rap", "dirty south": "Hip-hop & Rap",
-	"crunk": "Hip-hop & Rap", "grime": "Hip-hop & Rap", "conscious hip hop": "Hip-hop & Rap",
-	"abstract hip hop": "Hip-hop & Rap", "alternative hip hop": "Hip-hop & Rap",
-	"cloud rap": "Hip-hop & Rap", "drill": "Hip-hop & Rap", "mumble rap": "Hip-hop & Rap",
-	"boom bap": "Hip-hop & Rap", "horrorcore": "Hip-hop & Rap",
-
-	// Indie pop
-	"indie": "Indie pop", "indie pop": "Indie pop", "indie rock": "Indie pop",
-	"indie folk": "Indie pop", "dream pop": "Indie pop", "shoegaze": "Indie pop",
-	"chamber pop": "Indie pop", "art pop": "Indie pop", "baroque pop": "Indie pop",
-	"twee pop": "Indie pop", "lo-fi": "Indie pop", "slowcore": "Indie pop",
-	"folktronica": "Indie pop", "alternative": "Indie pop", "new wave": "Indie pop",
-	"post-punk": "Indie pop", "singer-songwriter": "Indie pop",
-	"noise pop": "Indie pop", "jangle pop": "Indie pop",
-	"indietronica": "Indie pop", "math rock": "Indie pop",
-
-	// Funk & Soul (funk, soul, disco, motown, reggae, ska, afrobeat, gospel, p-funk)
-	"funk": "Funk & Soul", "soul": "Funk & Soul",
-	"motown": "Funk & Soul", "rhythm and blues": "Funk & Soul",
-	"reggae": "Funk & Soul", "dancehall": "Funk & Soul", "ska": "Funk & Soul",
-	"afrobeat": "Funk & Soul", "afrobeats": "Funk & Soul",
-	"gospel": "Funk & Soul", "disco": "Funk & Soul",
-	"p-funk": "Funk & Soul", "deep funk": "Funk & Soul",
-
-	// R&B
-	"r&b": "R&B", "rnb": "R&B", "neo-soul": "R&B", "neo soul": "R&B",
-	"contemporary r&b": "R&B", "quiet storm": "R&B", "new jack swing": "R&B",
-
-	// Electronic
-	"electronic": "Electronic", "edm": "Electronic", "house": "Electronic",
-	"techno": "Electronic", "trance": "Electronic", "dubstep": "Electronic",
-	"drum and bass": "Electronic", "ambient": "Electronic", "chillwave": "Electronic",
-	"electronica": "Electronic", "synthpop": "Electronic", "synth-pop": "Electronic",
-	"electro": "Electronic", "deep house": "Electronic", "tropical house": "Electronic",
-	"progressive house": "Electronic", "future bass": "Electronic",
-	"downtempo": "Electronic", "trip-hop": "Electronic", "idm": "Electronic",
-	"chillout": "Electronic", "glitch": "Electronic", "minimal": "Electronic",
-	"new age": "Electronic", "electro house": "Electronic", "big room": "Electronic",
-	"future house": "Electronic", "bass music": "Electronic", "witch house": "Electronic",
-	"vaporwave": "Electronic", "synthwave": "Electronic", "retrowave": "Electronic",
-	"uk garage": "Electronic", "breakbeat": "Electronic",
-	"progressive trance": "Electronic", "psytrance": "Electronic",
-	"hardstyle": "Electronic", "gabber": "Electronic",
-	"dub": "Electronic", "glitch hop": "Electronic",
-
-	// Pop
-	"pop": "Pop", "dance pop": "Pop", "electropop": "Pop", "teen pop": "Pop",
-	"bubblegum pop": "Pop", "europop": "Pop", "k-pop": "Pop", "j-pop": "Pop",
-	"latin pop": "Pop", "power pop": "Pop", "sunshine pop": "Pop",
-	"sophisti-pop": "Pop", "synth pop": "Pop",
-	"dance": "Pop", "boy band": "Pop",
-
-	// Rock
-	"rock": "Rock", "classic rock": "Rock", "hard rock": "Rock",
-	"punk": "Rock", "punk rock": "Rock", "pop punk": "Rock", "emo": "Rock",
-	"grunge": "Rock", "post-rock": "Rock", "progressive rock": "Rock",
-	"psychedelic rock": "Rock", "garage rock": "Rock", "blues rock": "Rock",
-	"southern rock": "Rock", "folk rock": "Rock", "soft rock": "Rock",
-	"brit pop": "Rock", "britpop": "Rock",
-	"alternative rock": "Rock", "stoner rock": "Rock", "post-hardcore": "Rock",
-	"screamo": "Rock", "prog rock": "Rock",
-	"psychedelic": "Rock", "space rock": "Rock", "krautrock": "Rock",
-	"noise rock": "Rock", "surf rock": "Rock",
-
-	// Metal
-	"metal": "Metal", "heavy metal": "Metal", "metalcore": "Metal",
-	"death metal": "Metal", "black metal": "Metal", "thrash metal": "Metal",
-	"doom metal": "Metal", "power metal": "Metal", "progressive metal": "Metal",
-	"nu metal": "Metal", "symphonic metal": "Metal", "folk metal": "Metal",
-	"gothic metal": "Metal", "sludge metal": "Metal", "grindcore": "Metal",
-	"deathcore": "Metal", "djent": "Metal",
-
-	// Country
-	"country": "Country", "country rock": "Country", "alt-country": "Country",
-	"americana": "Country", "bluegrass": "Country", "country pop": "Country",
-	"bro-country": "Country", "outlaw country": "Country",
-	"honky tonk": "Country", "nashville sound": "Country",
-	"red dirt": "Country", "texas country": "Country",
-
-	// Latin
-	"latin": "Latin", "reggaeton": "Latin", "salsa": "Latin", "bachata": "Latin",
-	"cumbia": "Latin", "bossa nova": "Latin", "samba": "Latin", "merengue": "Latin",
-	"latin jazz": "Latin", "latin alternative": "Latin", "tropical": "Latin",
-	"corrido": "Latin", "norteno": "Latin", "tejano": "Latin",
-	"mpb": "Latin", "fado": "Latin", "flamenco": "Latin",
-
-	// World (Indian/Bollywood tags also map here)
-	"world": "World", "bollywood": "World", "hindi": "World", "indian": "World",
-	"filmi": "World", "hindustani": "World", "desi": "World",
-	"punjabi": "World", "tamil": "World", "telugu": "World",
-	"carnatic": "World", "bhangra": "World", "sufi": "World",
-	"indian classical": "World", "ghazal": "World",
-	"qawwali": "World", "kollywood": "World",
-	"celtic": "World", "african": "World", "middle eastern": "World",
-	"balkan": "World", "klezmer": "World",
-
-	// Jazz
-	"jazz": "Jazz", "smooth jazz": "Jazz",
-	"bebop": "Jazz", "swing": "Jazz",
-	"big band": "Jazz", "cool jazz": "Jazz",
-	"free jazz": "Jazz", "fusion": "Jazz",
-	"acid jazz": "Jazz", "vocal jazz": "Jazz",
-	"blues": "Jazz", "easy listening": "Jazz",
-	"lounge": "Jazz", "traditional": "Jazz",
-	"bop": "Jazz", "post-bop": "Jazz",
-	"hard bop": "Jazz", "contemporary jazz": "Jazz",
-	"soundtrack": "Jazz", "film score": "Jazz", "score": "Jazz",
-	"christmas": "Jazz", "holiday": "Jazz",
-
-	// Classical
-	"classical": "Classical", "opera": "Classical",
-	"baroque": "Classical", "romantic": "Classical",
-	"orchestral": "Classical", "symphony": "Classical",
-	"chamber music": "Classical", "choral": "Classical",
-	"minimalism": "Classical", "contemporary classical": "Classical",
-	"neo-classical": "Classical", "modern classical": "Classical",
-
-	// Comedy / spoken word → Other
-	"comedy": "Other", "stand-up comedy": "Other", "parody": "Other",
-	"spoken word": "Other", "humor": "Other",
-
-	// Folk → Indie pop
-	"folk": "Indie pop", "acoustic": "Indie pop",
-	"freak folk": "Indie pop", "neofolk": "Indie pop",
-	"anti-folk": "Indie pop", "psych-folk": "Indie pop",
-
-	// Misc
-	"experimental": "Other",
-}
-
-func classify(tags []string) string {
-	votes := make(map[string]int)
-	for i, tag := range tags {
-		t := strings.ToLower(strings.TrimSpace(tag))
-		if genre, ok := tagToGenre[t]; ok {
-			weight := 10 - i
-			if weight < 1 {
-				weight = 1
-			}
-			votes[genre] += weight
-		}
-	}
-	if len(votes) == 0 {
-		return "Other"
-	}
-	best := ""
-	bestScore := 0
-	for g, s := range votes {
-		if s > bestScore {
-			bestScore = s
-			best = g
-		}
-	}
-	return best
-}
-
-func queryLastFM(client *http.Client, artist string) ([]string, error) {
-	u := fmt.Sprintf("https://ws.audioscrobbler.com/2.0/?method=artist.getTopTags&artist=%s&api_key=%s&format=json",
-		url.QueryEscape(artist), apiKey)
-
+func queryLastFM(client *http.Client, apiKey, artist string) ([]string, error) {
+	u := apiBase + "?method=artist.getTopTags&format=json" +
+		"&artist=" + url.QueryEscape(artist) + "&api_key=" + url.QueryEscape(apiKey)
 	resp, err := client.Get(u)
 	if err != nil {
+		// net/http errors embed the full URL, API key included. Keep the cause only.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == 429 {
-		return nil, fmt.Errorf("rate limited")
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, errRateLimited
 	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-
-	var lfm LastFMResponse
+	var lfm lastfmResponse
 	if err := json.Unmarshal(body, &lfm); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unreadable response (HTTP %d)", resp.StatusCode)
 	}
-
-	if lfm.Error != 0 {
-		return nil, fmt.Errorf("lastfm: %s", lfm.Message)
+	switch lfm.Error {
+	case 0:
+	case 6: // "The artist you supplied could not be found"
+		return nil, errNotFound
+	case 29: // rate limit exceeded
+		return nil, errRateLimited
+	default:
+		return nil, fmt.Errorf("lastfm error %d: %s", lfm.Error, lfm.Message)
 	}
-
 	var tags []string
 	for _, t := range lfm.TopTags.Tag {
 		if t.Count > 0 {
@@ -270,306 +105,291 @@ func queryLastFM(client *http.Client, artist string) ([]string, error) {
 	return tags, nil
 }
 
-func main() {
-	dataDir := flag.String("data", "/tmp/spotify_cleaned", "directory with Streaming_History_Audio_*.json files")
-	dbPath := flag.String("db", "artists.db", "bbolt database path")
-	outPath := flag.String("out", "genre_map.json", "output genre map JSON")
-	annotPath := flag.String("annotations", "", "output annotations JSON (default: annotations.json next to -out)")
-	refresh := flag.Bool("refresh", false, "re-query all artists from Last.fm (ignores cache)")
-	workers := flag.Int("workers", 4, "concurrent Last.fm API workers")
-	apiKeyFlag := flag.String("api-key", "", "Last.fm API key (or set LASTFM_API_KEY env)")
-	flag.Parse()
-
-	apiKey = *apiKeyFlag
-	if apiKey == "" {
-		apiKey = os.Getenv("LASTFM_API_KEY")
-	}
-	if apiKey == "" {
-		log.Fatal("Last.fm API key required: pass -api-key or set LASTFM_API_KEY")
-	}
-
-	// Default annotations path: sibling of -out
-	if *annotPath == "" {
-		dir := filepath.Dir(*outPath)
-		*annotPath = filepath.Join(dir, "annotations.json")
-	}
-
-	// Load streaming history
-	files, _ := filepath.Glob(filepath.Join(*dataDir, "Streaming_History_Audio_*.json"))
-	sort.Strings(files)
-
-	artistHours := make(map[string]float64)
-	var totalRecords int
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			log.Fatalf("read %s: %v", f, err)
+// readArtists returns the hours listened per artist (plays of 30 s or more, the
+// report's own definition), skipping every excluded artist.
+func readArtists(dataDir string, excluded map[string]bool) (hours map[string]float64, files, records int, err error) {
+	paths, _ := filepath.Glob(filepath.Join(dataDir, "Streaming_History_Audio_*.json"))
+	sort.Strings(paths)
+	hours = map[string]float64{}
+	for _, p := range paths {
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil, 0, 0, rerr
 		}
-		var records []SpotifyRecord
-		if err := json.Unmarshal(data, &records); err != nil {
-			log.Fatalf("parse %s: %v", f, err)
+		var recs []spotifyRecord
+		if jerr := json.Unmarshal(data, &recs); jerr != nil {
+			return nil, 0, 0, fmt.Errorf("%s: %v", p, jerr)
 		}
-		totalRecords += len(records)
-		for _, r := range records {
-			if r.Artist != "" && r.MsPlayed >= 30000 {
-				artistHours[r.Artist] += float64(r.MsPlayed) / 3600000
+		records += len(recs)
+		for _, r := range recs {
+			if r.Artist != "" && r.MsPlayed >= 30000 && !excluded[r.Artist] {
+				hours[r.Artist] += float64(r.MsPlayed) / 3600000
 			}
 		}
 	}
+	return hours, len(paths), records, nil
+}
 
-	artists := make([]string, 0, len(artistHours))
-	for a := range artistHours {
+func main() {
+	dataDir := flag.String("data", "", "folder with the export's Streaming_History_Audio_*.json (required)")
+	dbPath := flag.String("db", "", "bbolt cache (default: <data>/.shr/lastfm.db)")
+	annotPath := flag.String("annotations", "", "annotations store to merge into (default: <data>/.shr/annotations.json)")
+	outPath := flag.String("out", "", "also write a flat {artist: genre} map here (legacy; the report does not read it)")
+	refresh := flag.Bool("refresh", false, "ask Last.fm about every artist again, ignoring the cache")
+	dryRun := flag.Bool("dry-run", false, "say how many artist names would be sent, then stop without any network use")
+	workers := flag.Int("workers", 4, "concurrent Last.fm requests")
+	apiKeyFlag := flag.String("api-key", "", "Last.fm API key (or set LASTFM_API_KEY)")
+	flag.Parse()
+
+	if *dataDir == "" {
+		log.Fatal("-data is required: the folder holding Streaming_History_Audio_*.json")
+	}
+	if *dbPath == "" {
+		*dbPath = filepath.Join(*dataDir, ".shr", "lastfm.db")
+	}
+	if *annotPath == "" {
+		*annotPath = filepath.Join(*dataDir, ".shr", "annotations.json")
+	}
+
+	excluded, err := loadExcluded(*dataDir)
+	if err != nil {
+		log.Fatalf("overrides: %v", err)
+	}
+	hours, nfiles, nrecords, err := readArtists(*dataDir, excluded)
+	if err != nil {
+		log.Fatalf("read export: %v", err)
+	}
+	if nfiles == 0 {
+		log.Fatalf("no Streaming_History_Audio_*.json in %s", *dataDir)
+	}
+	artists := make([]string, 0, len(hours))
+	universe := make(map[string]bool, len(hours))
+	for a := range hours {
 		artists = append(artists, a)
+		universe[a] = true
 	}
 	sort.Slice(artists, func(i, j int) bool {
-		return artistHours[artists[i]] > artistHours[artists[j]]
+		if hours[artists[i]] != hours[artists[j]] {
+			return hours[artists[i]] > hours[artists[j]]
+		}
+		return artists[i] < artists[j]
 	})
+	log.Printf("Read %d records from %d files: %d artists (%d excluded by overrides.json)",
+		nrecords, nfiles, len(artists), len(excluded))
 
-	log.Printf("Loaded %d records, %d unique artists from %d files", totalRecords, len(artists), len(files))
-
-	// Open bbolt
-	db, err := bolt.Open(*dbPath, 0644, &bolt.Options{Timeout: 1 * time.Second})
+	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
+		log.Fatalf("cache dir: %v", err)
+	}
+	db, err := bolt.Open(*dbPath, 0o644, &bolt.Options{Timeout: time.Second})
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		log.Fatalf("open cache: %v", err)
 	}
 	defer db.Close()
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(bucketArtists)
+		return err
+	}); err != nil {
+		log.Fatalf("cache: %v", err)
+	}
 
-	db.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucketIfNotExists(bucketArtists)
-		tx.CreateBucketIfNotExists(bucketMeta)
-		return nil
-	})
-
-	// Find which artists need querying
-	var needQuery []string
+	var need []string
 	cached := 0
 	db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketArtists)
 		for _, a := range artists {
-			if *refresh {
-				needQuery = append(needQuery, a)
-				continue
-			}
-			v := b.Get([]byte(a))
-			if v == nil {
-				needQuery = append(needQuery, a)
+			if *refresh || b.Get([]byte(a)) == nil {
+				need = append(need, a)
 			} else {
 				cached++
 			}
 		}
 		return nil
 	})
+	log.Printf("Cache: %d artists known, %d to ask Last.fm about", cached, len(need))
 
-	log.Printf("Cache: %d artists, need to query: %d", cached, len(needQuery))
-
-	if len(needQuery) > 0 {
-		client := &http.Client{Timeout: 10 * time.Second}
-		var queried atomic.Int64
-		var failed atomic.Int64
-		total := len(needQuery)
-
-		type result struct {
-			artist string
-			entry  ArtistEntry
-		}
-
-		ch := make(chan string, *workers*2)
-		results := make(chan result, *workers*2)
-
-		var wg sync.WaitGroup
-		for w := 0; w < *workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for artist := range ch {
-					tags, err := queryLastFM(client, artist)
-					if err != nil {
-						if strings.Contains(err.Error(), "rate limited") {
-							time.Sleep(2 * time.Second)
-							tags, err = queryLastFM(client, artist)
-						}
-						if err != nil {
-							failed.Add(1)
-							results <- result{artist, ArtistEntry{
-								Name:      artist,
-								Genre:     "Other",
-								Hours:     artistHours[artist],
-								QueryTime: time.Now().Unix(),
-								Source:    "lastfm-error",
-							}}
-							continue
-						}
-					}
-
-					tagNames := make([]string, 0, len(tags))
-					tagNames = append(tagNames, tags...)
-
-					genre := classify(tagNames)
-					queried.Add(1)
-					results <- result{artist, ArtistEntry{
-						Name:      artist,
-						Genre:     genre,
-						Tags:      tagNames,
-						Hours:     artistHours[artist],
-						QueryTime: time.Now().Unix(),
-						Source:    "lastfm",
-					}}
-
-					time.Sleep(260 * time.Millisecond) // ~3.8 req/sec per worker, but workers share this
-				}
-			}()
-		}
-
-		// Collector goroutine: batch-write to bbolt
-		done := make(chan struct{})
-		go func() {
-			batch := make([]result, 0, 100)
-			flush := func() {
-				if len(batch) == 0 {
-					return
-				}
-				db.Update(func(tx *bolt.Tx) error {
-					b := tx.Bucket(bucketArtists)
-					for _, r := range batch {
-						data, _ := json.Marshal(r.entry)
-						b.Put([]byte(r.artist), data)
-					}
-					return nil
-				})
-				batch = batch[:0]
-			}
-
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case r, ok := <-results:
-					if !ok {
-						flush()
-						close(done)
-						return
-					}
-					batch = append(batch, r)
-					q := queried.Load()
-					f := failed.Load()
-					if (q+f)%100 == 0 {
-						log.Printf("  %d/%d queried (%d failed)", q+f, total, f)
-						flush()
-					}
-				case <-ticker.C:
-					flush()
-				}
-			}
-		}()
-
-		// Feed artists to workers with overall rate limiting
-		limiter := time.NewTicker(280 * time.Millisecond) // ~3.5 req/sec overall
-		for _, a := range needQuery {
-			<-limiter.C
-			ch <- a
-		}
-		limiter.Stop()
-		close(ch)
-		wg.Wait()
-		close(results)
-		<-done
-
-		log.Printf("Done: %d queried, %d failed", queried.Load(), failed.Load())
+	if *dryRun {
+		log.Printf("Dry run: would send %d artist names to ws.audioscrobbler.com and nothing else. Nothing was sent.", len(need))
+		return
 	}
 
-	// Read all entries and build genre map
-	genreMap := make(map[string]string)
-	var totalH, otherH float64
-	genreHours := make(map[string]float64)
+	if len(need) > 0 {
+		apiKey := *apiKeyFlag
+		if apiKey == "" {
+			apiKey = os.Getenv("LASTFM_API_KEY")
+		}
+		if apiKey == "" {
+			log.Fatal("a Last.fm API key is needed to ask about new artists: pass -api-key or set LASTFM_API_KEY")
+		}
+		lookup(db, apiKey, need, max(*workers, 1))
+	}
 
-	today := time.Now().Format("2006-01-02")
-	var annotations []Annotation
-
+	// Collect every cached answer for this export's artists.
+	now := time.Now().Format("2006-01-02")
+	var fresh []Annotation
+	flat := map[string]string{}
 	db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketArtists)
-		b.ForEach(func(k, v []byte) error {
-			var e ArtistEntry
-			json.Unmarshal(v, &e)
-			name := string(k)
-			h := artistHours[name]
-			if h == 0 {
-				h = e.Hours
+		for _, a := range artists {
+			v := b.Get([]byte(a))
+			if v == nil {
+				continue
 			}
-			genreMap[name] = e.Genre
-			genreHours[e.Genre] += h
-			totalH += h
-			if e.Genre == "Other" {
-				otherH += h
+			var e cacheEntry
+			if json.Unmarshal(v, &e) != nil || e.Genre == "" {
+				continue
 			}
-			annotations = append(annotations, Annotation{
-				Artist:     name,
-				Title:      "",
-				Namespace:  "genre",
-				Value:      e.Genre,
-				Source:     "lastfm",
-				Model:      "artist.getTopTags",
-				Confidence: nil,
-				Observed:   today,
+			observed := now
+			if e.QueryTime > 0 {
+				observed = time.Unix(e.QueryTime, 0).Format("2006-01-02")
+			}
+			fresh = append(fresh, Annotation{
+				Artist: a, Namespace: "genre", Value: e.Genre,
+				Source: sourceName, Model: modelName, Observed: observed,
 			})
-			return nil
-		})
+			flat[a] = e.Genre
+		}
 		return nil
 	})
 
-	// Also add artists that might not be in DB yet
-	for _, a := range artists {
-		if _, ok := genreMap[a]; !ok {
-			genreMap[a] = "Other"
-			otherH += artistHours[a]
-			genreHours["Other"] += artistHours[a]
-			totalH += artistHours[a]
-			annotations = append(annotations, Annotation{
-				Artist:     a,
-				Title:      "",
-				Namespace:  "genre",
-				Value:      "Other",
-				Source:     "lastfm",
-				Model:      "artist.getTopTags",
-				Confidence: nil,
-				Observed:   today,
-			})
+	existing, rerr := os.ReadFile(*annotPath)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		log.Fatalf("read %s: %v", *annotPath, rerr)
+	}
+	merged, err := mergeAnnotations(existing, fresh, universe)
+	if err != nil {
+		log.Fatalf("%s: %v", *annotPath, err)
+	}
+	if err := writeFileAtomic(*annotPath, merged); err != nil {
+		log.Fatalf("write %s: %v", *annotPath, err)
+	}
+	if *outPath != "" {
+		data, _ := json.MarshalIndent(flat, "", "  ")
+		if err := writeFileAtomic(*outPath, data); err != nil {
+			log.Fatalf("write %s: %v", *outPath, err)
 		}
 	}
 
-	// Sort annotations by artist name for stable output
-	sort.Slice(annotations, func(i, j int) bool {
-		return annotations[i].Artist < annotations[j].Artist
-	})
-
-	// Write genre map
-	data, _ := json.MarshalIndent(genreMap, "", "  ")
-	os.WriteFile(*outPath, data, 0644)
-
-	// Write annotations
-	af := AnnotationsFile{
-		SchemaVersion: 1,
-		Annotations:   annotations,
+	genreHours := map[string]float64{}
+	var total float64
+	for _, a := range artists {
+		total += hours[a]
+		if g, ok := flat[a]; ok {
+			genreHours[g] += hours[a]
+		}
 	}
-	aData, _ := json.MarshalIndent(af, "", "  ")
-	os.WriteFile(*annotPath, aData, 0644)
-
-	// Stats
-	log.Printf("\n=== Genre breakdown ===")
-	type gstat struct {
-		genre string
-		hours float64
-	}
-	var stats []gstat
+	var covered float64
+	names := make([]string, 0, len(genreHours))
 	for g, h := range genreHours {
-		stats = append(stats, gstat{g, h})
+		covered += h
+		names = append(names, g)
 	}
-	sort.Slice(stats, func(i, j int) bool { return stats[i].hours > stats[j].hours })
-	for _, s := range stats {
-		log.Printf("  %-20s %7.0fh  %5.1f%%", s.genre, s.hours, s.hours/totalH*100)
+	sort.Slice(names, func(i, j int) bool {
+		if genreHours[names[i]] != genreHours[names[j]] {
+			return genreHours[names[i]] > genreHours[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	log.Printf("=== Genre breakdown (by hours listened) ===")
+	for _, g := range names {
+		log.Printf("  %-16s %7.0fh  %5.1f%%", g, genreHours[g], genreHours[g]/total*100)
 	}
-	log.Printf("  %-20s %7.0fh  %5.1f%%", "TOTAL", totalH, 100.0)
-	log.Printf("\nGenre map:    %d artists -> %s", len(genreMap), *outPath)
-	log.Printf("Annotations:  %d entries -> %s", len(annotations), *annotPath)
-	log.Printf("DB:           %s", *dbPath)
+	log.Printf("  %-16s %7.0fh  %5.1f%%  (the rest stays Unclassified, not Other)", "classified", covered, covered/total*100)
+	log.Printf("Wrote %d lastfm annotations into %s (other sources left untouched)", len(fresh), *annotPath)
+}
+
+// lookup asks Last.fm about each artist, ~3.5 requests a second overall, and
+// caches every definite answer as it arrives so an interrupted run resumes.
+// Transient failures (network, rate limits that persist) are retried once and
+// then skipped without caching, so a later run asks again.
+var (
+	requestGap = 280 * time.Millisecond // ~3.5 requests a second overall
+	retryAfter = 2 * time.Second
+)
+
+func lookup(db *bolt.DB, apiKey string, need []string, workers int) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	var answered, failed atomic.Int64
+	total := len(need)
+
+	jobs := make(chan string, workers)
+	results := make(chan cacheEntry, workers*2)
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for artist := range jobs {
+				tags, err := queryLastFM(client, apiKey, artist)
+				if errors.Is(err, errRateLimited) {
+					time.Sleep(retryAfter)
+					tags, err = queryLastFM(client, apiKey, artist)
+				}
+				switch {
+				case err == nil || errors.Is(err, errNotFound):
+					e := cacheEntry{Name: artist, Tags: tags, QueryTime: time.Now().Unix()}
+					e.Genre, _ = classify(tags)
+					answered.Add(1)
+					results <- e
+				default:
+					failed.Add(1)
+					log.Printf("  skipped %q: %v", artist, err)
+				}
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var batch []cacheEntry
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			err := db.Update(func(tx *bolt.Tx) error {
+				b := tx.Bucket(bucketArtists)
+				for _, e := range batch {
+					data, _ := json.Marshal(e)
+					if err := b.Put([]byte(e.Name), data); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				log.Printf("  cache write failed: %v", err)
+			}
+			batch = batch[:0]
+		}
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case e, ok := <-results:
+				if !ok {
+					flush()
+					return
+				}
+				batch = append(batch, e)
+				if n := answered.Load() + failed.Load(); n%100 == 0 {
+					log.Printf("  %d/%d asked (%d skipped)", n, total, failed.Load())
+				}
+			case <-tick.C:
+				flush()
+			}
+		}
+	}()
+
+	limiter := time.NewTicker(requestGap)
+	defer limiter.Stop()
+	for _, a := range need {
+		<-limiter.C
+		jobs <- a
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+	<-done
+	log.Printf("Asked about %d artists: %d answered, %d skipped (they will be retried next run)", total, answered.Load(), failed.Load())
 }

@@ -1,66 +1,70 @@
 # thunderblird
 
-Go tool that classifies artists by querying the Last.fm `artist.getTopTags` API and mapping tags to the report's genre vocabulary.
+Optional helper that classifies the artists in your Spotify export by their
+[Last.fm](https://www.last.fm/api/show/artist.getTopTags) top tags and records
+the answers as `lastfm` annotations in the report's `.shr/annotations.json`.
 
-## Genres
+The report works without it. Run it once and the next report run picks the
+answers up (precedence: `user` > `musicbrainz` > `sidecar` > `lastfm` > `llm`,
+so your own corrections always win and Last.fm outranks an LLM guess).
 
-Output uses the same genre set as the Odin report:
+## Privacy
 
-> Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other
+It sends **artist names only** to `ws.audioscrobbler.com`: no plays, no times,
+no counts. Artists listed in `exclude_artists` in `<data>/.shr/overrides.json`
+are never sent. `-dry-run` prints how many names would be sent and stops
+before any network use.
 
 ## Usage
 
-```
-export LASTFM_API_KEY=your_key_here
+```sh
+export LASTFM_API_KEY=your_key_here          # https://www.last.fm/api/account/create
 
-go run . -data /path/to/spotify_cleaned
+go run . -data ~/Downloads/my_spotify_data -dry-run   # how many names would leave?
+go run . -data ~/Downloads/my_spotify_data
 ```
 
-Or pass the key directly:
-
-```
-go run . -api-key YOUR_KEY -data /path/to/spotify_cleaned
-```
+Then `./spotify-history-report ~/Downloads/my_spotify_data` as usual.
 
 ## Flags
 
-| Flag            | Default                   | Description                                       |
-|-----------------|---------------------------|---------------------------------------------------|
-| `-api-key`      | `$LASTFM_API_KEY`         | Last.fm API key                                   |
-| `-data`         | `/tmp/spotify_cleaned`    | Directory with `Streaming_History_Audio_*.json`    |
-| `-db`           | `artists.db`              | bbolt cache database                              |
-| `-out`          | `genre_map.json`          | Output genre map (artist -> genre)                |
-| `-annotations`  | `annotations.json`        | Output in `.shr/annotations.json` format          |
-| `-workers`      | `4`                       | Concurrent Last.fm workers                        |
-| `-refresh`      | `false`                   | Re-query all artists (ignore cache)               |
+| Flag            | Default                       | Description |
+|-----------------|-------------------------------|-------------|
+| `-data`         | *(required)*                  | Folder with `Streaming_History_Audio_*.json` |
+| `-api-key`      | `$LASTFM_API_KEY`             | Last.fm API key (only needed when there is something to ask) |
+| `-annotations`  | `<data>/.shr/annotations.json`| Store to merge into |
+| `-db`           | `<data>/.shr/lastfm.db`       | bbolt cache, so an interrupted run resumes |
+| `-out`          | *(off)*                       | Also write a flat `{artist: genre}` map (legacy; the report does not read it) |
+| `-refresh`      | `false`                       | Ask about every artist again, ignoring the cache |
+| `-dry-run`      | `false`                       | Report what would be sent, then stop |
+| `-workers`      | `4`                           | Concurrent requests (overall rate is capped at ~3.5/s) |
 
-## Output
+## How it behaves
 
-**genre_map.json** -- flat `{"Artist Name": "Genre"}` map for the Odin pipeline.
+- **Merges, never replaces.** Only artist-level `genre` records that Last.fm
+  itself wrote for artists in this export are replaced. User, LLM and every other
+  source, plus any field this tool does not know about, are left exactly as
+  found. An unreadable store, or one with a different `schema_version`, stops the
+  run instead of being overwritten.
+- **Unknown is not "Other".** If none of an artist's tags maps to a genre, or
+  Last.fm does not know the artist, nothing is written and the artist stays
+  *Unclassified* in the report. "Other" is written only when a tag really means
+  it (comedy, spoken word, ...).
+- **Failures are not answers.** Network errors and persistent rate limiting are
+  skipped and not cached; the next run asks again. A request is retried once on
+  a 429.
+- **Deterministic.** Tags are voted by rank (the first tag weighs 10, down to 1);
+  ties go to the alphabetically first genre, so a rerun never changes an answer.
+- **The key stays out of logs.** Errors report the cause, not the request URL.
 
-**annotations.json** -- structured annotations compatible with the `.shr/` schema:
+## Genres
 
-```json
-{
-  "schema_version": 1,
-  "annotations": [
-    {
-      "artist": "Name",
-      "title": "",
-      "namespace": "genre",
-      "value": "Rock",
-      "source": "lastfm",
-      "model": "artist.getTopTags",
-      "confidence": null,
-      "observed": "2026-10-19"
-    }
-  ]
-}
+Output uses the report's 14 labels: Hip-hop & Rap, Indie pop, Funk & Soul,
+Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other.
+A test fails if the tag table ever produces anything else.
+
+## Development
+
+```sh
+go vet ./... && go test -race ./...
 ```
-
-## Design
-
-- Weighted tag voting: top Last.fm tags get higher weight, mapped to the report genre vocabulary
-- bbolt persistent cache survives interrupted runs
-- Overall rate limiter at ~3.5 req/sec to stay within Last.fm limits
-- Per-worker retry on 429 responses
