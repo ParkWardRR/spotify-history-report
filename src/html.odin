@@ -155,6 +155,19 @@ report_json :: proc(s: Stats) -> string {
 	}
 	w(&j, "],")
 
+	// Biggest genres with their top artists
+	w(&j, "\"genre_artists\":[")
+	for &ga, gi in s.genre_artists {
+		if gi > 0 do w(&j, ",")
+		wf(&j, "{{\"genre\":\"%s\",\"hours\":%.1f,\"artists\":[", esc(ga.genre), ga.hours)
+		for &a, i in ga.artists {
+			if i > 0 do w(&j, ",")
+			wf(&j, "{{\"name\":\"%s\",\"hours\":%.1f}}", esc(a.name), a.hours)
+		}
+		w(&j, "]}")
+	}
+	w(&j, "],")
+
 	// Top albums
 	w(&j, "\"top_albums\":[")
 	for &a, i in s.top_albums {

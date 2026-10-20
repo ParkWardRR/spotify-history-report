@@ -511,6 +511,17 @@
     border-top: 1px solid var(--grid);
   }
 
+  /* Genre-artists horizontal bars */
+  .genre-artists-section { margin-top: 24px; }
+  .genre-artist-group { margin-bottom: 28px; }
+  .genre-artist-group h3 { font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+  .genre-artist-group .genre-hours { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .ga-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+  .ga-name { font-size: 13px; color: var(--ink); width: 160px; flex-shrink: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ga-track { flex: 1; height: 18px; background: var(--page); border-radius: 3px; overflow: hidden; }
+  .ga-fill { height: 100%; border-radius: 3px; }
+  .ga-hrs { font-size: 12px; color: var(--muted); width: 45px; flex-shrink: 0; }
+
   /* Responsive */
   @media (max-width: 720px) {
     .stats-row { grid-template-columns: repeat(2, 1fr); }
@@ -528,6 +539,8 @@
     .heatmap-cell { min-height: 8px; }
     .heatmap-hour { font-size: 8px; }
     .section { padding: 20px 16px; }
+    .ga-name { width: 100px; font-size: 12px; }
+    .genre-artist-group h3 { font-size: 14px; }
   }
   @media (max-width: 480px) {
     .stats-row { grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -566,6 +579,9 @@
     <div id="genre-chart"></div>
     <div class="legend" id="genre-legend"></div>
   </div>
+
+  <!-- Artists by genre -->
+  <div id="genre-artists-target"></div>
 
   <!-- Key stats -->
   <div class="stats-row" id="stats-row-1"></div>
@@ -1195,6 +1211,32 @@ const GENRE_COLORS = DATA.genre_colors || {};
       setTimeout(resetScrub, 1500);
     });
   }
+
+  // ─── Genre artists section ──────────────────────────────
+  (function() {
+    var groups = D.genre_artists || [];
+    if (!groups.length) return;
+    var html = '<div class="section"><h2>Artists by genre</h2>';
+    html += '<h3>Top artists in each of the biggest genres, ranked by listening hours within the genre.</h3>';
+    html += '<div class="genre-artists-section">';
+    groups.forEach(function(g) {
+      if (!g.artists.length) return;
+      var maxH = g.artists[0].hours || 1;
+      var color = GENRE_COLORS[g.genre] || '#898781';
+      html += '<div class="genre-artist-group">';
+      html += '<h3>' + escapeHtml(g.genre) + '<span class="genre-hours">' + Math.round(g.hours) + 'h in total</span></h3>';
+      g.artists.forEach(function(a) {
+        var pct = (a.hours / maxH * 100).toFixed(1);
+        html += '<div class="ga-row"><div class="ga-name" title="' + escapeHtml(a.name) + '">' + escapeHtml(a.name) + '</div>';
+        html += '<div class="ga-track"><div class="ga-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
+        html += '<div class="ga-hrs">' + a.hours.toFixed(1) + 'h</div></div>';
+      });
+      html += '</div>';
+    });
+    html += '</div></div>';
+    var target = document.getElementById('genre-artists-target');
+    if (target) target.innerHTML = html;
+  })();
 
   document.getElementById('heatmap-subtitle').textContent =
     `Hours by day of week and hour of day (${D.timezone || 'local time'}).`;

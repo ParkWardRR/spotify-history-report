@@ -106,6 +106,7 @@ Stats :: struct {
 	avg_track_length:   [dynamic]Year_Avg_Len,
 	// Genre data (populated when LLM or cache available)
 	genre_area:         [dynamic]Genre_Quarter,
+	genre_artists:      [dynamic]Genre_Artists, // biggest genres, each with its top artists
 	genre_order:        [dynamic]string,
 	genre_colors:       map[string]string,
 	genre_classified:   int,
@@ -141,6 +142,17 @@ Artist_Stat :: struct {
 	name:  string,
 	hours: f64,
 }
+
+// The artists that carry one genre, ranked by listening time within it.
+// `hours` is the genre's total over the whole library, not just these artists.
+Genre_Artists :: struct {
+	genre:   string,
+	hours:   f64,
+	artists: [dynamic]Artist_Stat,
+}
+
+GENRE_ARTISTS_GENRES  :: 6  // how many genres get a list
+GENRE_ARTISTS_PER_GENRE :: 15
 
 Album_Stat :: struct {
 	album:  string,

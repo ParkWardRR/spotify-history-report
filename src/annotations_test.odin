@@ -2,6 +2,7 @@ package spotify_report
 
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:testing"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -348,4 +349,48 @@ test_report_lists_the_biggest_gaps :: proc(t: ^testing.T) {
 index_of :: proc(s, sub: string) -> int {
 	for i in 0 ..= len(s) - len(sub) do if s[i:i + len(sub)] == sub do return i
 	return -1
+}
+
+@(test)
+test_genre_artists_rank_inside_each_genre_and_skip_unclassified :: proc(t: ^testing.T) {
+	f := store_of(
+		ann("Small", "", "Rock", "llm", "2026-01-01"),
+		ann("Big", "", "Rock", "llm", "2026-01-01"),
+		ann("Beat", "", "Electronic", "llm", "2026-01-01"),
+	)
+	r := build_genre_resolver(f, nil)
+	defer genre_resolver_destroy(&r)
+
+	// Rock: Big 3 plays, Small 1. Electronic: Beat 2. Nobody classified Ghost.
+	list := [?]Play{
+		mk_play("2020-02-01T12:00:00Z", "A", "Big"), mk_play("2020-02-02T12:00:00Z", "B", "Big"),
+		mk_play("2020-02-03T12:00:00Z", "C", "Big"), mk_play("2020-02-04T12:00:00Z", "D", "Small"),
+		mk_play("2020-02-05T12:00:00Z", "E", "Beat"), mk_play("2020-02-06T12:00:00Z", "F", "Beat"),
+		mk_play("2020-02-07T12:00:00Z", "G", "Ghost"), mk_play("2020-02-08T12:00:00Z", "G", "Ghost"),
+		mk_play("2020-02-09T12:00:00Z", "G", "Ghost"), mk_play("2020-02-10T12:00:00Z", "G", "Ghost"),
+	}
+	s := compute_stats(list[:])
+	compute_genre_stats(&s, list[:], &r)
+
+	testing.expect_value(t, len(s.genre_artists), 2) // Unclassified is not a genre
+	testing.expect_value(t, s.genre_artists[0].genre, "Rock") // 4 plays beat 2
+	testing.expect_value(t, len(s.genre_artists[0].artists), 2)
+	testing.expect_value(t, s.genre_artists[0].artists[0].name, "Big")
+	testing.expect_value(t, s.genre_artists[0].artists[1].name, "Small")
+	testing.expect_value(t, s.genre_artists[1].genre, "Electronic")
+	testing.expect_value(t, s.genre_artists[1].artists[0].name, "Beat")
+	for ga in s.genre_artists do testing.expect(t, ga.genre != UNCLASSIFIED)
+}
+
+@(test)
+test_report_json_carries_genre_artists :: proc(t: ^testing.T) {
+	r := resolver_for("Big", "Rock")
+	defer genre_resolver_destroy(&r)
+	list := [?]Play{mk_play("2020-02-01T12:00:00Z", "A", "Big")}
+	s := compute_stats(list[:])
+	compute_genre_stats(&s, list[:], &r)
+	html, ok := render_report(s, false)
+	testing.expect(t, ok)
+	testing.expect(t, strings.contains(html, `"genre_artists":[{"genre":"Rock"`))
+	testing.expect(t, strings.contains(html, `{"name":"Big","hours":`))
 }

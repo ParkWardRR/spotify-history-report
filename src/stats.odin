@@ -651,6 +651,40 @@ GENRE_COLORS_DEFAULT :: [?][2]string{
 	{"Other",          "#b8b7b2"},
 }
 
+// Ranks artists inside each classified genre. Every play counts toward the genre
+// it resolved to, so an artist with a track-level override can appear under two
+// genres. Unclassified is not a genre and gets no list.
+compute_genre_artists :: proc(stats: ^Stats, plays: []Play, picks: []string) {
+	by_genre: map[string]map[string]i64
+	genre_ms: map[string]i64
+	defer {
+		for _, &m in by_genre { delete(m) }
+		delete(by_genre)
+		delete(genre_ms)
+	}
+	for &p, i in plays {
+		g := picks[i]
+		if g == UNCLASSIFIED do continue
+		if g not_in by_genre do by_genre[g] = {}
+		(&by_genre[g])[p.artist] += p.ms
+		genre_ms[g] += p.ms
+	}
+
+	names := make([dynamic]string, context.temp_allocator)
+	for g in genre_ms do append(&names, g)
+	slice.sort_by(names[:], proc(a, b: string) -> bool { return a < b })
+	for g in names {
+		append(&stats.genre_artists, Genre_Artists{
+			genre = g,
+			hours = f64(genre_ms[g]) / 3600000,
+			artists = top_n_artists(by_genre[g], GENRE_ARTISTS_PER_GENRE),
+		})
+	}
+	// Biggest first; the name breaks ties so a rerun never reorders them.
+	slice.stable_sort_by(stats.genre_artists[:], proc(a, b: Genre_Artists) -> bool { return a.hours > b.hours })
+	resize(&stats.genre_artists, min(len(stats.genre_artists), GENRE_ARTISTS_GENRES))
+}
+
 compute_genre_stats :: proc(stats: ^Stats, plays: []Play, r: ^Genre_Resolver) {
 	if len(r.by_artist) == 0 && len(r.by_track) == 0 do return
 
@@ -685,6 +719,8 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, r: ^Genre_Resolver) {
 		append(&stats.genre_order, UNCLASSIFIED)
 		stats.genre_colors[UNCLASSIFIED] = UNCLASSIFIED_COLOR
 	}
+
+	compute_genre_artists(stats, plays, picks)
 
 	// Genre share by quarter. A quarter is partial when the data does not span
 	// all of it (typically the current quarter, or the one the history starts in);
