@@ -216,6 +216,14 @@ Priority: Anthropic > OpenAI > OpenRouter (auto-detected from env vars or config
 
 See [`FRAMEWORK.md`](FRAMEWORK.md) for a structured prompt framework if you want an LLM to help you extend or customize the report. It covers the full analysis pipeline: data specification, six analysis layers, visualization hierarchy, color system, and interactivity patterns.
 
+## Roadmap
+
+See [`ROADMAP.md`](ROADMAP.md) for where this is going: correctness fixes to the
+calendar and ranking code, a canonical track-identity layer, multi-source
+annotations replacing the flat artist→genre map, listening-behaviour scores, and
+an optional local audio-enrichment sidecar for similarity, clustering and
+playlist ordering.
+
 ## Privacy
 
 - **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API — and those only send artist names, not your listening history.
