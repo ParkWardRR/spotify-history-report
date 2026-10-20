@@ -106,7 +106,7 @@ ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_dat
 ./spotify-history-report --setup
 ```
 
-Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant. A key that is merely present in your environment is never used without `--enrich` (or a saved `--setup`).
+Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant. A key that is merely present in your environment is never used without `--enrich` (or a saved `--setup`). The key is passed to `curl` through a config file in a private temporary directory that is deleted after each request, never on the command line where other users could see it.
 
 ---
 

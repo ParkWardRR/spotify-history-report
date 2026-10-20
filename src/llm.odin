@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:strings"
 import "core:encoding/json"
 import "core:c/libc"
+import "core:time"
 
 GENRE_LIST :: `Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other`
 
@@ -104,11 +105,10 @@ call_openai :: proc(key: string, model: string, prompt: string) -> string {
 	strings.write_string(&body, json_escape(prompt))
 	strings.write_string(&body, "\"}],\"temperature\":0}")
 
-	return curl_post(
+	return llm_post(
 		"https://api.openai.com/v1/chat/completions",
-		fmt.aprintf("Authorization: Bearer %s", key),
-		strings.to_string(body),
-	)
+		{fmt.tprintf("Authorization: Bearer %s", key)},
+		strings.to_string(body), extract_openai_content)
 }
 
 call_anthropic :: proc(key: string, model: string, prompt: string) -> string {
@@ -120,7 +120,10 @@ call_anthropic :: proc(key: string, model: string, prompt: string) -> string {
 	strings.write_string(&body, json_escape(prompt))
 	strings.write_string(&body, "\"}]}")
 
-	return curl_post_anthropic(key, strings.to_string(body))
+	return llm_post(
+		"https://api.anthropic.com/v1/messages",
+		{fmt.tprintf("x-api-key: %s", key), "anthropic-version: 2023-06-01"},
+		strings.to_string(body), extract_anthropic_content)
 }
 
 call_openrouter :: proc(key: string, model: string, prompt: string) -> string {
@@ -132,24 +135,55 @@ call_openrouter :: proc(key: string, model: string, prompt: string) -> string {
 	strings.write_string(&body, json_escape(prompt))
 	strings.write_string(&body, "\"}],\"temperature\":0}")
 
-	return curl_post(
+	return llm_post(
 		"https://openrouter.ai/api/v1/chat/completions",
-		fmt.aprintf("Authorization: Bearer %s", key),
-		strings.to_string(body),
-	)
+		{fmt.tprintf("Authorization: Bearer %s", key)},
+		strings.to_string(body), extract_openai_content)
 }
 
-curl_post :: proc(url: string, auth_header: string, body: string) -> string {
-	// Write body to temp file
-	body_path := "/tmp/shr_req.json"
-	resp_path := "/tmp/shr_resp.json"
-	_ = os.write_entire_file(body_path, transmute([]u8)body)
+// POSTs JSON through curl and returns the provider's answer text ("" on failure,
+// with the reason in llm_last_error).
+//
+// The key never appears on a command line, where any local user could read it
+// with `ps`: the URL and headers go in a curl config file inside a private
+// (0700) directory made for this one call, which is deleted afterwards. The
+// request body and the response live there too, not at a fixed shared path.
+llm_post :: proc(url: string, headers: []string, body: string, extract: proc(resp: string) -> string) -> string {
+	base := os.temp_directory(context.temp_allocator) or_else "/tmp"
+	dir := fmt.aprintf("%s/shr-llm-%d-%d", base, os.get_pid(), time.to_unix_nanoseconds(time.now()))
+	defer delete(dir)
+	if strings.contains(dir, "'") {
+		llm_last_error = "the temporary directory path contains a quote character"
+		return ""
+	}
+	if os.make_directory(dir, {.Read_User, .Write_User, .Execute_User}) != nil {
+		llm_last_error = "could not create a private temporary directory"
+		return ""
+	}
+	cfg_path  := fmt.aprintf("%s/curl.cfg", dir)
+	body_path := fmt.aprintf("%s/request.json", dir)
+	resp_path := fmt.aprintf("%s/response.json", dir)
+	defer {
+		_ = os.remove(cfg_path); _ = os.remove(body_path); _ = os.remove(resp_path)
+		_ = os.remove(dir)
+		delete(cfg_path); delete(body_path); delete(resp_path)
+	}
+
+	private := os.Permissions{.Read_User, .Write_User}
+	cfg := strings.builder_make()
+	defer strings.builder_destroy(&cfg)
+	fmt.sbprintf(&cfg, "url = \"%s\"\n", url)
+	for h in headers do fmt.sbprintf(&cfg, "header = \"%s\"\n", h)
+	if os.write_entire_file(cfg_path, transmute([]u8)strings.to_string(cfg), private) != nil ||
+	   os.write_entire_file(body_path, transmute([]u8)body, private) != nil {
+		llm_last_error = "could not write the request files"
+		return ""
+	}
 
 	cmd := fmt.aprintf(
-		"curl -s -X POST '%s' -H 'Content-Type: application/json' -H '%s' -d @'%s' -o '%s' 2>/dev/null",
-		url, auth_header, body_path, resp_path)
+		"curl -s --max-time 120 -X POST -H 'Content-Type: application/json' -K '%s' -d @'%s' -o '%s' 2>/dev/null",
+		cfg_path, body_path, resp_path)
 	defer delete(cmd)
-
 	cmd_cstr := strings.clone_to_cstring(cmd)
 	defer delete(cmd_cstr)
 	libc.system(cmd_cstr)
@@ -161,35 +195,7 @@ curl_post :: proc(url: string, auth_header: string, body: string) -> string {
 	}
 	defer delete(data)
 
-	// Extract content from OpenAI-style response
-	resp_str := string(data)
-	content := extract_openai_content(resp_str)
-	if len(content) == 0 do note_llm_failure(resp_str)
-	return content
-}
-
-curl_post_anthropic :: proc(key: string, body: string) -> string {
-	body_path := "/tmp/shr_req.json"
-	resp_path := "/tmp/shr_resp.json"
-	_ = os.write_entire_file(body_path, transmute([]u8)body)
-
-	cmd := fmt.aprintf(
-		"curl -s -X POST 'https://api.anthropic.com/v1/messages' -H 'Content-Type: application/json' -H 'x-api-key: %s' -H 'anthropic-version: 2023-06-01' -d @'%s' -o '%s' 2>/dev/null",
-		key, body_path, resp_path)
-	defer delete(cmd)
-
-	cmd_cstr := strings.clone_to_cstring(cmd)
-	defer delete(cmd_cstr)
-	libc.system(cmd_cstr)
-
-	data, err := os.read_entire_file(resp_path, context.allocator)
-	if err != nil {
-		llm_last_error = "no response (is curl installed and the network reachable?)"
-		return ""
-	}
-	defer delete(data)
-
-	content := extract_anthropic_content(string(data))
+	content := extract(string(data))
 	if len(content) == 0 do note_llm_failure(string(data))
 	return content
 }
