@@ -496,3 +496,22 @@ test_sample_report_is_reproducible_and_sane :: proc(t: ^testing.T) {
 		testing.expect_value(t, e.new_pct + e.top10_pct + e.rest_pct, 100)
 	}
 }
+
+// ── Report options ───────────────────────────────────────────────────────────
+
+@(test)
+test_noindex_adds_robots_tags_only_when_asked :: proc(t: ^testing.T) {
+	s := stats_for(mk_play("2024-03-01T12:00:00Z", "Song", "Artist"))
+
+	plain, ok1 := render_report(s, false)
+	testing.expect(t, ok1)
+	testing.expect(t, !strings.contains(plain, `name="robots"`), "robots tag must be absent by default")
+
+	hidden, ok2 := render_report(s, true)
+	testing.expect(t, ok2)
+	testing.expect(t, strings.contains(hidden, `<meta name="robots" content="noindex, nofollow, noarchive">`))
+	testing.expect(t, strings.contains(hidden, `<meta name="googlebot" content="noindex, nofollow">`))
+	// Exactly one pair, right after the charset line, and the data is untouched.
+	testing.expect_value(t, strings.count(hidden, `name="robots"`), 1)
+	testing.expect_value(t, len(hidden) - len(plain), len(NOINDEX_REPLACEMENT) - len(NOINDEX_ANCHOR))
+}
