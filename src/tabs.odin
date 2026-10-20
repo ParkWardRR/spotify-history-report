@@ -319,7 +319,33 @@ build_library :: proc(s: ^Stats, cw: int) -> string {
 	if len(s.never_skipped) > 0 {
 		rows := make([dynamic]Row3, context.temp_allocator)
 		for t in s.never_skipped { append(&rows, Row3{t.track, t.artist, fmt.tprintf("%d plays", t.plays)}) }
-		append(&out, section("Never skipped", cw, "15+ plays, zero skips"), list_table(rows[:], cw, NORD14))
+		append(&out, section("Never skipped", cw, "15+ plays, zero skips"), list_table(rows[:], cw, NORD14), "")
+	}
+
+	// Track identity: how sure we are which recording each play was.
+	id := s.identity
+	if id.plays > 0 {
+		append(&out, section("Track identity", cw, "run with --identities for the full review list"))
+		append(&out, kv_line("matched by URI", fmt.tprintf("%.1f%% of plays", pct(id.plays_by_uri, id.plays)), COL_OK))
+		if id.plays_metadata_only > 0 {
+			append(&out, kv_line("text only", fmt.tprintf("%s plays, unresolved", fmt_int(id.plays_metadata_only)), COL_WARN))
+		}
+		append(&out, kv_line("songs", fmt.tprintf("%s (exact title + artist)", fmt_int(id.songs))))
+		if id.songs_multi_uri > 0 {
+			append(&out, kv_line("multi-release", fmt.tprintf("%s songs span several URIs, counted together", fmt_int(id.songs_multi_uri))))
+		}
+		if id.near_duplicate_groups > 0 || id.version_families > 0 {
+			append(&out, kv_line("to review", fmt.tprintf("%d near-duplicates · %d version families (never merged automatically)",
+				id.near_duplicate_groups, id.version_families), COL_WARN))
+		}
+		if len(s.identity_candidates) > 0 {
+			rows := make([dynamic]Row3, context.temp_allocator)
+			for c in s.identity_candidates[:min(5, len(s.identity_candidates))] {
+				kind := "near-duplicate" if c.kind == .Near_Duplicate else "versions"
+				append(&rows, Row3{c.title, fmt.tprintf("%s · %s", c.artist, kind), fmt.tprintf("%d variants", len(c.songs))})
+			}
+			append(&out, "", list_table(rows[:], cw, NORD13))
+		}
 	}
 	return join_v(out[:])
 }

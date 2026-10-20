@@ -17,7 +17,7 @@ Two rules shape everything below:
    models live in an optional sidecar that communicates through cached files on
    disk. You can delete the sidecar and the tool still works.
 
-Status: **Phase 0 is implemented** (see its section for what shipped and the
+Status: **Phases 0 and 1a are implemented** (see its section for what shipped and the
 decisions made along the way); Phases 1–7 are planned. Phase numbers are
 dependency order, not a schedule.
 
@@ -188,6 +188,36 @@ Reference implementation worth reading first:
 **Done when:** every qualifying play resolves to an identity row; merges are
 reversible; the identity report states how many plays resolved by URI, by MBID,
 by fingerprint and not at all.
+
+### Phase 1 split
+
+- **1a (implemented, offline):** URI identity, `Metadata_Only` as an explicit
+  unresolved tier, near-duplicate and version-family candidates (proposed,
+  never merged), `.shr/overrides.json` merges and `keep_separate`, the
+  `.shr/identities.json` cache, an `Identity` pipeline stage, a Library-tab
+  section and `--identities`. The report still counts a *song* as exact title +
+  artist, so nothing about existing metrics changed.
+- **1b (planned):** opt-in MusicBrainz lookups (descriptive User-Agent, ~1
+  req/s, cached and resumable, `--no-network` kill switch), then AcoustID for
+  local audio. Both fill the `mbid`/fingerprint tiers the report already shows
+  as zero. A search hit is a *candidate*, not a resolution, unless the match is
+  exact and unique.
+- **Deferred:** the `--identity-review` TUI. The review list is available as
+  text and the decision is a file edit; a TUI is worth building once 1b makes
+  the list longer.
+
+### Design notes from implementation
+
+- Near-duplicates require the same normalised *full* title. An earlier draft
+  grouped by "same version markers", which would have proposed
+  `Song (Live in Paris)` and `Song (Live in Tokyo)` as one recording.
+- A URI shared by several spellings is reported but not merged; the metrics
+  key on text, so such a URI's plays split across its spellings.
+- Overrides are validated strictly (unknown keys, half-specified references,
+  unknown URIs, cycles) because silently ignoring a user's decision is worse
+  than stopping.
+- Merges also remap the skip tally, otherwise a merged track would silently
+  stop qualifying for "never skipped".
 
 ---
 

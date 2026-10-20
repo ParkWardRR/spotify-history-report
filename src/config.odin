@@ -190,6 +190,8 @@ json_escape :: proc(s: string) -> string {
 		case '\\': strings.write_string(&b, "\\\\")
 		case '\n': strings.write_string(&b, "\\n")
 		case '\t': strings.write_string(&b, "\\t")
+		case '\r': strings.write_string(&b, "\\r")
+		case 0 ..< 0x20: strings.write_string(&b, fmt.tprintf("\\u%04x", int(c)))
 		case:      strings.write_rune(&b, c)
 		}
 	}

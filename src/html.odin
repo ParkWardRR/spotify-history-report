@@ -79,6 +79,9 @@ report_json :: proc(s: Stats) -> string {
 		w(&j, "\"hours_subtitle\":\"\",")
 	}
 	wf(&j, "\"timezone\":\"%s\",", esc(s.timezone))
+	w(&j, "\"identity\":")
+	summary_json(&j, s.identity)
+	w(&j, ",")
 
 	// Most played song
 	wf(&j, "\"most_played_song\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}},",

@@ -38,7 +38,11 @@ grep -q "America/Los_Angeles" "$WORK/a.log" || fail "timezone not reported"
 cmp -s "$WORK/a.html" "$WORK/b.html" || fail "two runs of the same export differ"
 cmp -s "$WORK/a.html" "$WORK/c.html" && fail "changing --timezone did not change the report"
 
-python3 -I - "$WORK/a.html" <<'PY'
+[ -s "$WORK/data/.shr/identities.json" ] || fail "no .shr/identities.json written"
+"$BIN" "$WORK/data" --identities > "$WORK/ids.txt" || fail "--identities failed"
+grep -q "by Spotify URI" "$WORK/ids.txt" || fail "--identities printed no coverage"
+
+python3 -I - "$WORK/a.html" "$WORK/data/.shr/identities.json" <<'PY'
 import json, re, sys
 html = open(sys.argv[1]).read()
 m = re.search(r"const DATA\s*=\s*(\{.*?\});\s*\n", html, re.S)
@@ -49,5 +53,8 @@ assert d["timezone"] == "America/Los_Angeles", d["timezone"]
 for e in d["explore_obsess"]:
     assert e["new_pct"] + e["top10_pct"] + e["rest_pct"] == 100, e
 assert any(q["partial"] for q in d["genre_area"]) or not d["hours_subtitle"], "partial year not flagged"
+ids = json.load(open(sys.argv[2]))
+assert ids["schema_version"] == 1 and ids["summary"]["plays_metadata_only"] == 0, ids["summary"]
+assert d["identity"]["plays_by_uri"] == d["total_plays"], d["identity"]
 print("smoke: ok")
 PY

@@ -13,17 +13,19 @@ import "core:time"
 Stage :: enum {
 	Scan,
 	Load,
+	Identity,
 	Compute,
 	Genres,
 	Report,
 }
 
 STAGE_TITLES := [Stage]string{
-	.Scan    = "Scan",
-	.Load    = "Load",
-	.Compute = "Compute",
-	.Genres  = "Genres",
-	.Report  = "Report",
+	.Scan     = "Scan",
+	.Load     = "Load",
+	.Identity = "Identity",
+	.Compute  = "Compute",
+	.Genres   = "Genres",
+	.Report   = "Report",
 }
 
 Stage_State :: enum {
@@ -65,6 +67,59 @@ stage_msg :: proc(stage: Stage, state: Stage_State, detail: string, current := 0
 	emit(Stage_Msg{stage, state, current, total, detail})
 }
 
+Load_Result :: struct {
+	plays:          [dynamic]Play,
+	tally:          Skip_Tally,
+	total_records:  int,
+	bad_timestamps: int,
+	failed_path:    string, // set when a file could not be parsed
+}
+
+// Reads every export file into chronologically ordered plays, plus the skip
+// tally covering the records that don't qualify.
+load_plays :: proc(files: []string, clock: ^Clock, progress: bool) -> (r: Load_Result, ok: bool) {
+	for path, fi in files {
+		records, loaded := load_records(path)
+		if !loaded {
+			r.failed_path = path
+			return r, false
+		}
+		r.total_records += len(records)
+
+		for &rec in records {
+			play, status := record_to_play(rec, clock)
+			switch status {
+			case .Not_A_Track:   continue
+			case .Bad_Timestamp: r.bad_timestamps += 1; continue
+			case .Ok:
+			}
+			tally_record(&r.tally, play.year, play_key(play), is_skip(play))
+			if qualifies(play) do append(&r.plays, play)
+		}
+		delete(records)
+		if progress do stage_msg(.Load, .Active, filepath.base(path), fi + 1, len(files))
+	}
+	sort_plays(r.plays[:])
+	return r, true
+}
+
+// Builds the identity table, applying `.shr/overrides.json` when present.
+// Returns a message in `err` if the overrides file can't be used.
+resolve_identities :: proc(plays: []Play, data_dir: string, tally: ^Skip_Tally = nil) -> (table: Identity_Table, err: string) {
+	ov, ov_err := load_overrides(data_dir)
+	if len(ov_err) > 0 do return {}, ov_err
+
+	table = build_identity_table(plays, &ov)
+	if len(ov.merges) == 0 do return
+
+	changed, apply_err := apply_overrides(plays, ov, table, tally)
+	if len(apply_err) > 0 do return {}, fmt.aprintf("overrides.json: %s", apply_err)
+	table = build_identity_table(plays, &ov) // names changed, so rebuild
+	table.summary.merges_applied = len(ov.merges)
+	table.summary.plays_remapped = changed
+	return
+}
+
 pipeline_thread_proc :: proc(data: rawptr) {
 	opts := (^Run_Opts)(data)^
 	run_pipeline(opts)
@@ -98,46 +153,48 @@ run_pipeline :: proc(o: Run_Opts) {
 
 	// ── Load ──
 	clock := make_clock(o.timezone)
-	all_plays: [dynamic]Play
-	tally: Skip_Tally
-	defer skip_tally_destroy(&tally)
-	total_records := 0
-	bad_timestamps := 0
 	stage_msg(.Load, .Active, "", 0, len(files))
-	for path, fi in files {
-		records, ok := load_records(path)
-		if !ok {
-			fail(.Load, fmt.aprintf("Failed to parse %s", path), "The file is not valid Streaming_History JSON.")
-			return
-		}
-		total_records += len(records)
-
-		for &rec in records {
-			play, status := record_to_play(rec, &clock)
-			switch status {
-			case .Not_A_Track:   continue
-			case .Bad_Timestamp: bad_timestamps += 1; continue
-			case .Ok:
-			}
-			tally_record(&tally, play.year, play_key(play), is_skip(play))
-			if qualifies(play) do append(&all_plays, play)
-		}
-		delete(records)
-		stage_msg(.Load, .Active, filepath.base(path), fi + 1, len(files))
+	loaded, ok := load_plays(files[:], &clock, true)
+	if !ok {
+		fail(.Load, fmt.aprintf("Failed to parse %s", loaded.failed_path), "The file is not valid Streaming_History JSON.")
+		return
 	}
-	sort_plays(all_plays[:])
+	defer skip_tally_destroy(&loaded.tally)
+	all_plays := loaded.plays
+	tally := &loaded.tally // not a copy: overrides replace its maps in place
 	load_detail := fmt.aprintf("%s records · %s qualifying plays · %s",
-		fmt_int(total_records), fmt_int(len(all_plays)), clock_label(clock))
-	if bad_timestamps > 0 {
-		load_detail = fmt.aprintf("%s · %s unreadable timestamps skipped", load_detail, fmt_int(bad_timestamps))
+		fmt_int(loaded.total_records), fmt_int(len(all_plays)), clock_label(clock))
+	if loaded.bad_timestamps > 0 {
+		load_detail = fmt.aprintf("%s · %s unreadable timestamps skipped", load_detail, fmt_int(loaded.bad_timestamps))
 	}
 	stage_msg(.Load, .Done, load_detail, len(files), len(files))
+
+	// ── Identity ──
+	stage_msg(.Identity, .Active, "")
+	table, id_err := resolve_identities(all_plays[:], o.data_dir, tally)
+	if len(id_err) > 0 {
+		fail(.Identity, id_err, "Fix or remove .shr/overrides.json in your data directory, then run again.")
+		return
+	}
+	saved := save_identities(o.data_dir, table)
+	id_detail := fmt.aprintf("%s of plays matched to a Spotify URI · %s songs",
+		fmt.aprintf("%.0f%%", pct(table.summary.plays_by_uri, table.summary.plays)), fmt_int(table.summary.songs))
+	if table.summary.near_duplicate_groups > 0 {
+		id_detail = fmt.aprintf("%s · %d to review", id_detail, table.summary.near_duplicate_groups)
+	}
+	if !saved do id_detail = fmt.aprintf("%s · cache not saved", id_detail)
+	stage_msg(.Identity, .Done, id_detail)
 
 	// ── Compute ──
 	stage_msg(.Compute, .Active, "")
 	stats := new(Stats)
-	stats^ = compute_stats(all_plays[:], &tally)
+	stats^ = compute_stats(all_plays[:], tally)
 	stats.timezone = clock_label(clock)
+	stats.identity = table.summary
+	for c, i in table.candidates {
+		if i >= 10 do break
+		append(&stats.identity_candidates, c)
+	}
 	stage_msg(.Compute, .Done, fmt.aprintf("%s artists · %s tracks",
 		fmt_int(stats.unique_artists), fmt_int(stats.unique_tracks)))
 

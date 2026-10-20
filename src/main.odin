@@ -10,6 +10,7 @@ main :: proc() {
 
 	args := os.args
 	force_plain := false
+	identities_only := false
 
 	for a in args[1:] {
 		switch a {
@@ -24,6 +25,8 @@ main :: proc() {
 			return
 		case "--plain":
 			force_plain = true
+		case "--identities":
+			identities_only = true
 		}
 	}
 
@@ -77,6 +80,11 @@ main :: proc() {
 	opts.provider, opts.api_key, opts.model = resolve_provider(cfg)
 	opts.timezone = resolve_timezone(cli_timezone, cfg)
 
+	if identities_only {
+		if !run_identities(opts) do os.exit(1)
+		return
+	}
+
 	interactive := is_tty(STDIN_FD) && is_tty(STDOUT_FD) && !force_plain
 	if interactive && run_tui(opts) do return
 
@@ -117,6 +125,31 @@ run_tui :: proc(opts: Run_Opts) -> bool {
 		fmt.println()
 	case .Running:
 	}
+	return true
+}
+
+// `--identities`: no LLM, no report; just resolve identities and print them.
+run_identities :: proc(opts: Run_Opts) -> bool {
+	files := find_json_files(opts.data_dir)
+	if len(files) == 0 {
+		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
+		return false
+	}
+	clock := make_clock(opts.timezone)
+	loaded, ok := load_plays(files[:], &clock, false)
+	if !ok {
+		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
+		return false
+	}
+	table, err := resolve_identities(loaded.plays[:], opts.data_dir, &loaded.tally)
+	if len(err) > 0 {
+		fmt.eprintfln("%s", err)
+		return false
+	}
+	if !save_identities(opts.data_dir, table) {
+		fmt.eprintfln("note: could not write %s/%s", SHR_DIR_NAME, IDENTITIES_FILE)
+	}
+	fmt.print(identity_report_text(table))
 	return true
 }
 

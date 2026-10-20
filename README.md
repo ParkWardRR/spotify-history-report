@@ -167,6 +167,7 @@ src/
 ├── tui.odin       static screens: --help, --guide
 ├── parser.odin    Spotify JSON deserialization, record → play conversion
 ├── calendar.odin  timestamps → local time (named timezone, true day ordinals)
+├── identity.odin  track identity: URI resolution, duplicate candidates, overrides
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache
 ├── llm.odin       LLM genre classification (Anthropic/OpenAI/OpenRouter via curl)
@@ -199,6 +200,38 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 Timestamps are converted to a named timezone (DST included) before bucketing, so days, streaks, weekdays and hours match your wall clock. Pick the zone with `--timezone Europe/Berlin`, a `"timezone"` key in the config file, or `$TZ`; the default is `America/Los_Angeles`. It needs the system zoneinfo database; without one the tool falls back to a fixed UTC−8 and says so in the report footer and progress output.
 
 Rankings break ties by name, so the same export always produces the same report. A partial final year or quarter is kept and labelled as partial rather than dropped.
+
+## Track identity
+
+Every play is matched to a Spotify track URI from your export, and the tool is explicit about what it does *not* know:
+
+- **Matched by URI** — an exact identifier; the strongest evidence available offline.
+- **Text only** — records without a URI are kept by exact title + artist and reported as unresolved.
+- **Nothing is merged on fuzzy evidence.** Songs that differ only in case or punctuation (`Don't Stop` / `Dont Stop`) are listed as *near-duplicates* to review; songs that share a base title but are different versions (`Live`, `Remastered`, `Instrumental`, `Karaoke`, `Acoustic`, `Demo`, `Edit`, `Remix`, `Mono`/`Stereo`) are listed as *version families* and are never proposed as one recording. Accents are not folded either.
+
+The report counts a *song* as exact title + artist text, so one song released on an album and a compilation (two URIs) counts once, while a URI whose track was renamed counts under each spelling.
+
+```bash
+./spotify-history-report ~/Downloads/my_spotify_data/ --identities   # coverage + review list, no LLM needed
+```
+
+This also writes `.shr/identities.json` next to your data (a derived cache; safe to delete). To act on a candidate, create `.shr/overrides.json` there:
+
+```json
+{
+  "version": 1,
+  "merges": [
+    { "from": { "artist": "Fleet", "title": "Dont Stop" },
+      "into": { "artist": "Fleet", "title": "Don't Stop" } },
+    { "from": { "uri": "spotify:track:abc" }, "into": { "uri": "spotify:track:def" } }
+  ],
+  "keep_separate": [
+    { "a": { "artist": "Fleet", "title": "Anthem" }, "b": { "artist": "Fleet", "title": "Anthem (Live in Paris)" } }
+  ]
+}
+```
+
+A reference is either a `uri` or both `artist` and `title`. Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 
 ## Genre classification
 
