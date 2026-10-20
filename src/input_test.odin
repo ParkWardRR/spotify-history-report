@@ -222,3 +222,60 @@ test_history_with_nothing_to_report_says_why :: proc(t: ^testing.T) {
 	testing.expect(t, !ok3)
 	testing.expect(t, strings.contains(r3.err, "no listening records"), r3.err)
 }
+
+REC_OTHER :: `{"ts":"2023-05-01T10:08:00Z","ms_played":200000,"master_metadata_track_name":"Song C","master_metadata_album_artist_name":"Other Listener","master_metadata_album_album_name":"Album","spotify_track_uri":"spotify:track:ccc"}`
+REC_OTHER_SHORT :: `{"ts":"2023-05-01T10:12:00Z","ms_played":5000,"master_metadata_track_name":"Song D","master_metadata_album_artist_name":"Other Listener","master_metadata_album_album_name":"Album","spotify_track_uri":"spotify:track:ddd"}`
+
+@(test)
+test_exclude_artists_removes_every_trace_of_the_artist :: proc(t: ^testing.T) {
+	dir := fixture_dir("exclude")
+	write_fixture(dir, "Streaming_History_Audio_2023.json", fmt.tprintf("[%s,%s,%s,%s]", REC_A, REC_OTHER, REC_OTHER_SHORT, REC_B))
+	scan := scan_inputs({dir})
+	testing.expect_value(t, scan.err, "")
+	c := make_clock("UTC")
+
+	all, ok := load_plays(scan.entries[:], &c, false)
+	testing.expect(t, ok)
+	testing.expect_value(t, len(all.plays), 2)
+	testing.expect_value(t, all.summary.excluded, 0)
+
+	r, ok2 := load_plays(scan.entries[:], &c, false, {"Other Listener", "Nobody"})
+	testing.expect(t, ok2)
+	testing.expect_value(t, len(r.plays), 1)
+	testing.expect_value(t, r.plays[0].artist, "Artist")
+	testing.expect_value(t, r.summary.excluded, 2) // the qualifying play and the short listen
+	testing.expect_value(t, r.summary.music_events, 2)
+	testing.expect_value(t, r.tally.year_total[2023], 2) // skip rates ignore them too
+	testing.expect_value(t, len(r.summary.exclusions_unmatched), 1)
+	testing.expect_value(t, r.summary.exclusions_unmatched[0], "Nobody")
+	testing.expect(t, strings.contains(exclusion_note(r.summary), "matched nothing for Nobody"))
+
+	// Matching is exact: a different case is a different artist.
+	r3, _ := load_plays(scan.entries[:], &c, false, {"other listener"})
+	testing.expect_value(t, len(r3.plays), 2)
+}
+
+@(test)
+test_excluding_everyone_says_so :: proc(t: ^testing.T) {
+	dir := fixture_dir("exclude_all")
+	write_fixture(dir, "Streaming_History_Audio_2023.json", fmt.tprintf("[%s]", REC_OTHER))
+	scan := scan_inputs({dir})
+	c := make_clock("UTC")
+	r, ok := load_plays(scan.entries[:], &c, false, {"Other Listener"})
+	testing.expect(t, !ok)
+	testing.expect(t, strings.contains(r.err, "exclude_artists"))
+}
+
+@(test)
+test_exclusions_hold_across_several_files :: proc(t: ^testing.T) {
+	dir := fixture_dir("exclude_multi")
+	write_fixture(dir, "Streaming_History_Audio_2022.json", fmt.tprintf("[%s]", REC_A))
+	write_fixture(dir, "Streaming_History_Audio_2023.json", fmt.tprintf("[%s]", REC_OTHER))
+	write_fixture(dir, "Streaming_History_Audio_2024.json", fmt.tprintf("[%s]", REC_OTHER_SHORT))
+	scan := scan_inputs({dir})
+	c := make_clock("UTC")
+	r, ok := load_plays(scan.entries[:], &c, false, {"Other Listener"})
+	testing.expect(t, ok)
+	testing.expect_value(t, r.summary.excluded, 2)
+	testing.expect_value(t, len(r.summary.exclusions_unmatched), 0)
+}

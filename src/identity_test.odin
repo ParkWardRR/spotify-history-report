@@ -359,3 +359,24 @@ test_sample_resolves_every_play_by_uri :: proc(t: ^testing.T) {
 	testing.expect_value(t, tbl.summary.songs, 36)
 	testing.expect_value(t, len(tbl.candidates), 0)
 }
+
+@(test)
+test_exclude_artists_parses_and_rejects_mistakes :: proc(t: ^testing.T) {
+	ov, err := parse_ov(`{"version":1,"exclude_artists":["Artist A","Artist B"]}`)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(ov.exclude_artists), 2)
+	testing.expect_value(t, ov.exclude_artists[1], "Artist B")
+
+	ov, err = parse_ov(`{"version":1}`) // absent means nothing is excluded
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(ov.exclude_artists), 0)
+
+	_, err = parse_ov(`{"exclude_artists":"Artist A"}`)
+	testing.expect(t, len(err) > 0 && contains(err, "must be a list"))
+	_, err = parse_ov(`{"exclude_artists":["Artist A", 7]}`)
+	testing.expect(t, len(err) > 0 && contains(err, "exclude_artists[1]"))
+	_, err = parse_ov(`{"exclude_artists":[""]}`)
+	testing.expect(t, len(err) > 0 && contains(err, "non-empty"))
+	_, err = parse_ov(`{"exclude_artist":["A"]}`) // typo for exclude_artists
+	testing.expect(t, len(err) > 0 && contains(err, "unknown key"))
+}

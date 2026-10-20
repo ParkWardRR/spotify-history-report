@@ -89,6 +89,8 @@ Import_Summary :: struct {
 	music_events:     int,    // rows with a track and artist, after the above
 	short_listens:    int,    // music events under 30 s (not plays)
 	plays:            int,    // qualifying plays (30 s or more)
+	excluded:         int,    // music rows dropped by exclude_artists
+	exclusions_unmatched: [dynamic]string, // exclude_artists names that matched no row
 }
 
 Load_Result :: struct {
@@ -104,7 +106,13 @@ Load_Result :: struct {
 // is in them, identical copies are read once, and a row that repeats one from a
 // different file (overlapping exports) is dropped and counted. Repeats inside
 // one file are kept: those can be real replays.
-load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r: Load_Result, ok: bool) {
+//
+// Rows by an `exclude` artist are dropped here, before the tally, the sessions
+// and the plays are built, so they leave no trace in any metric.
+load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclude: []string = nil) -> (r: Load_Result, ok: bool) {
+	exclude_hits: map[string]int // not temp: the pipeline frees temp between files
+	defer delete(exclude_hits)
+	for name in exclude do exclude_hits[name] = 0
 	seen_files: map[u64]bool
 	seen_rows: map[u64]int // row fingerprint → index of the file it first appeared in
 	events: [dynamic]Session_Event // every music row, for sessions
@@ -157,6 +165,11 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 				continue
 			}
 			seen_rows[row] = fi
+			if play.artist in exclude_hits {
+				exclude_hits[play.artist] += 1
+				r.summary.excluded += 1
+				continue
+			}
 			r.summary.music_events += 1
 			tally_record(&r.tally, play.year, play_key(play), play.skipped, play.ms)
 			slot := -1
@@ -172,6 +185,9 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 		if progress do stage_msg(.Load, .Active, e.name, fi + 1, len(entries))
 	}
 	r.summary.plays = len(r.plays)
+	for name in exclude { // listed order, so the report never depends on map order
+		if exclude_hits[name] == 0 do append(&r.summary.exclusions_unmatched, name)
+	}
 
 	if r.summary.files_used == 0 {
 		r.err, r.hint = no_history_message(entries, r.summary)
@@ -182,6 +198,10 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 		r.err = "No listening of 30 seconds or more in this export."
 		r.hint = "Every music row ended before 30 seconds, so there is nothing to report on. Check that this is the complete Extended Streaming History."
 		if r.summary.music_events == 0 do r.err, r.hint = "The streaming-history files contain no music listening.", "They only hold podcasts or other non-music rows, or no rows at all. Check that you downloaded the Extended Streaming History."
+		if r.summary.excluded > 0 {
+			r.err = "Nothing is left after exclude_artists."
+			r.hint = fmt.aprintf("%s rows were removed by exclude_artists in .shr/overrides.json, and no other listening of 30 seconds or more remains. Check the names.", fmt_int(r.summary.excluded))
+		}
 		return r, false
 	}
 	sort_plays(r.plays[:])
@@ -258,9 +278,15 @@ run_pipeline :: proc(o: Run_Opts) {
 	stage_msg(.Scan, .Done, fmt.aprintf("%d JSON file%s", len(scan.entries), "" if len(scan.entries) == 1 else "s"))
 
 	// ── Load ──
+	// Overrides are read first: exclude_artists decides which rows are loaded.
+	ov, ov_err := load_overrides(o.data_dir)
+	if len(ov_err) > 0 {
+		fail(.Load, ov_err, "Fix or remove .shr/overrides.json in your data directory, then run again.")
+		return
+	}
 	clock := make_clock(o.timezone)
 	stage_msg(.Load, .Active, "", 0, len(scan.entries))
-	loaded, ok := load_plays(scan.entries[:], &clock, true)
+	loaded, ok := load_plays(scan.entries[:], &clock, true, ov.exclude_artists[:])
 	if !ok {
 		fail(.Load, loaded.err, loaded.hint)
 		return
@@ -275,11 +301,6 @@ run_pipeline :: proc(o: Run_Opts) {
 
 	// ── Identity ──
 	stage_msg(.Identity, .Active, "")
-	ov, ov_err := load_overrides(o.data_dir)
-	if len(ov_err) > 0 {
-		fail(.Identity, ov_err, "Fix or remove .shr/overrides.json in your data directory, then run again.")
-		return
-	}
 	table, id_err := resolve_identities(all_plays[:], ov, tally)
 	if len(id_err) > 0 {
 		fail(.Identity, fmt.aprintf("overrides.json: %s", id_err), "Fix or remove .shr/overrides.json in your data directory, then run again.")
@@ -430,8 +451,19 @@ import_files_text :: proc(s: Import_Summary) -> string {
 }
 
 // The surprising parts of an import, each as a short clause; empty when none.
+// What exclude_artists did, including names that matched nothing (usually a typo).
+exclusion_note :: proc(s: Import_Summary) -> string {
+	parts: [dynamic]string
+	if s.excluded > 0 do append(&parts, fmt.aprintf("%s rows excluded by exclude_artists", fmt_int(s.excluded)))
+	if len(s.exclusions_unmatched) > 0 {
+		append(&parts, fmt.aprintf("exclude_artists matched nothing for %s", strings.join(s.exclusions_unmatched[:], ", ", context.temp_allocator)))
+	}
+	return strings.join(parts[:], " · ")
+}
+
 import_notes_text :: proc(s: Import_Summary) -> string {
 	parts: [dynamic]string
+	if note := exclusion_note(s); len(note) > 0 do append(&parts, note)
 	if s.short_listens > 0 do append(&parts, fmt.aprintf("%s short listens", fmt_int(s.short_listens)))
 	if s.non_music > 0 do append(&parts, fmt.aprintf("%s non-music rows skipped", fmt_int(s.non_music)))
 	if s.overlap_dropped > 0 do append(&parts, fmt.aprintf("%s rows repeated across files dropped", fmt_int(s.overlap_dropped)))
