@@ -38,7 +38,8 @@ env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/hom
 	|| { cat "$WORK/bare.log"; echo "smoke: FAIL: report without genres or a key" >&2; exit 1; }
 grep -q "enrichment off" "$WORK/bare.log" || { echo "smoke: FAIL: enrichment-off not reported" >&2; exit 1; }
 # A key in the environment is not consent: without --enrich nothing may be sent.
-ANTHROPIC_API_KEY=sk-ant-invalid HOME="$WORK/home" "$BIN" "$WORK/bare" --plain -o "$WORK/bare2.html" 2>&1 | grep -q "enrichment off" \
+ANTHROPIC_API_KEY=sk-ant-invalid HOME="$WORK/home" "$BIN" "$WORK/bare" --plain -o "$WORK/bare2.html" >"$WORK/bare2.log" 2>&1
+grep -q "enrichment off" "$WORK/bare2.log" \
 	|| { echo "smoke: FAIL: a key alone enabled enrichment" >&2; exit 1; }
 
 fail() { echo "smoke: FAIL: $*" >&2; exit 1; }
