@@ -280,11 +280,27 @@ resolver, `unknown` as its own *Unclassified* series, user annotations in
   before loading anything if no key was set, even when every artist was already
   classified. It now fails (with the count and the fix) only when some artist
   actually needs the LLM; the "LLM is mandatory" intent is unchanged.
+- **Last.fm as a source (PRs #1, #2).** `lastfm` ranks below `sidecar` and above
+  `llm`: crowd-sourced tags beat a name-only guess but never curated metadata or
+  audio. `tools/thunderblird` (Go, opt-in) writes those annotations by *merging*
+  into `.shr/annotations.json`, so user and LLM records survive. A failed lookup
+  or an artist with no mappable tag stays unclassified; it is never filed as
+  `Other`. `-dry-run` shows how many names would leave the machine, and artists
+  in `exclude_artists` are never sent.
 - **Not done:** annotating by Spotify URI (merge overrides rename plays, so an
   annotation written against the old spelling stops matching; use the merged
   name), per-annotation confidence from the LLM (the prompt returns none, so it
   is recorded as `null` rather than invented), and using non-genre namespaces
   anywhere in the UI. They are stored and validated, ready for Phases 4–5.
+
+### Shared accounts (PRs #3, #6)
+
+A GDPR export from a shared account contains other people's listening.
+`exclude_artists` in `.shr/overrides.json` drops every row by the named artists
+at load time, before the skip tally, sessions and plays exist, so they leave no
+trace in any metric; names that match nothing are reported. `tools/review-server`
+(Go, loopback only) is the review workflow that produces that list. It is a
+helper, not part of the core binary.
 
 ---
 
