@@ -177,6 +177,12 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool) -> (r:
 		return r, false
 	}
 	assign_sessions(events[:], r.plays[:]) // before sorting: slots index the load order
+	if len(r.plays) == 0 {
+		r.err = "No listening of 30 seconds or more in this export."
+		r.hint = "Every music row ended before 30 seconds, so there is nothing to report on. Check that this is the complete Extended Streaming History."
+		if r.summary.music_events == 0 do r.err, r.hint = "The streaming-history files contain no music listening.", "They only hold podcasts or other non-music rows, or no rows at all. Check that you downloaded the Extended Streaming History."
+		return r, false
+	}
 	sort_plays(r.plays[:])
 	return r, true
 }
@@ -196,6 +202,11 @@ no_history_message :: proc(entries: []Input_Entry, sum: Import_Summary) -> (err,
 	if sum.account_files > 0 {
 		return "This is your recent account history, not Extended Streaming History.",
 			"The basic download only covers about the last year and has no track IDs. Request \"Extended streaming history\" at spotify.com/account/privacy (run --guide for steps), then use that ZIP."
+	}
+	for e in entries {
+		base := e.name
+		if strings.contains(base, "Streaming_History_") do return "The streaming-history files contain no listening records.",
+			"They hold no rows at all. Download the Extended Streaming History again."
 	}
 	if len(entries) == 0 {
 		return "No .json files found.", "Pass the ZIP Spotify emailed you, the folder you extracted it to, or the Streaming_History_Audio_*.json files. Run --guide for how to get it."

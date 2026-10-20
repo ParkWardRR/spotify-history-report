@@ -356,8 +356,10 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 
 	// Longest streak (consecutive days)
 	day_set: map[i64]bool
-	defer delete(day_set)
+	day_label: map[i64]string // ordinal → "YYYY-MM-DD", for naming the largest gap
+	defer { delete(day_set); delete(day_label) }
 	for &p in plays {
+		if p.ordinal not_in day_set do day_label[p.ordinal] = fmt.aprintf("%04d-%02d-%02d", p.year, p.month, p.day)
 		day_set[p.ordinal] = true
 	}
 	day_list: [dynamic]i64
@@ -375,6 +377,15 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 		max_streak = max(max_streak, cur_streak)
 	}
 	stats.longest_streak = max_streak
+
+	// Largest stretch of days with no plays between two days that have some. A
+	// long one may be a real break or a missing file; the report says only that.
+	for d, i in day_list {
+		if i == 0 do continue
+		if gap := int(d - day_list[i-1] - 1); gap > stats.largest_gap.days {
+			stats.largest_gap = Gap_Stat{gap, day_label[day_list[i-1]], day_label[d]}
+		}
+	}
 
 	// Earworms: 7-day sliding window per track
 	{

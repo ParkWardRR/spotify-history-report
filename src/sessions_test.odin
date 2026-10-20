@@ -114,3 +114,16 @@ test_densest_window_matches_the_obvious_scan :: proc(t: ^testing.T) {
 	b, _ := densest_window(nil, 7)
 	testing.expect_value(t, b, 0)
 }
+
+@(test)
+test_largest_gap_names_the_quiet_stretch :: proc(t: ^testing.T) {
+	s := stats_for(
+		mk_play("2022-01-01T12:00:00Z", "A", "X"),
+		mk_play("2022-01-03T12:00:00Z", "A", "X"),   // 1 empty day before
+		mk_play("2022-03-05T12:00:00Z", "A", "X"),   // 60 empty days before (Jan 4 .. Mar 4)
+		mk_play("2022-03-06T12:00:00Z", "A", "X"),
+	)
+	testing.expect_value(t, s.largest_gap.days, 60)
+	testing.expect_value(t, s.largest_gap.from, "2022-01-03")
+	testing.expect_value(t, s.largest_gap.to, "2022-03-05")
+}

@@ -122,6 +122,13 @@ Stats :: struct {
 	identity:           Identity_Summary,
 	identity_candidates: [dynamic]Candidate, // top review candidates, most-played first
 	import_summary:     Import_Summary,
+	largest_gap:        Gap_Stat,
+}
+
+Gap_Stat :: struct {
+	days: int,    // whole days with no plays between `from` and `to`
+	from: string, // last day with plays before the gap
+	to:   string, // first day with plays after it
 }
 
 Genre_Quarter :: struct {

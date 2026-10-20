@@ -1186,6 +1186,8 @@ const GENRE_COLORS = DATA.genre_colors || {};
     if (m.non_music) bits.push(`${n(m.non_music)} podcast or other non-music rows left out`);
     if (m.overlap_dropped) bits.push(`${n(m.overlap_dropped)} rows repeated across files dropped`);
     if (m.malformed) bits.push(`${n(m.malformed)} rows with unreadable timestamps skipped`);
+    const gap = D.largest_gap;
+    if (gap && gap.days >= 45) bits.push(`no plays at all between ${gap.from} and ${gap.to} (${n(gap.days)} days), which may be a real break or a missing file`);
     return `Read ${n(m.records)} rows from ${m.files_used} file${m.files_used === 1 ? '' : 's'}: ${bits.join('; ')}.`;
   }
 

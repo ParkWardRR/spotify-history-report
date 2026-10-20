@@ -107,6 +107,7 @@ report_json :: proc(s: Stats) -> string {
 	summary_json(&j, s.identity)
 	w(&j, ",")
 	i := s.import_summary
+	wf(&j, "\"largest_gap\":{{\"days\":%d,\"from\":\"%s\",\"to\":\"%s\"}},", s.largest_gap.days, esc(s.largest_gap.from), esc(s.largest_gap.to))
 	wf(&j, "\"import\":{{\"source\":\"%s\",\"files_used\":%d,\"files_ignored\":%d,\"files_identical\":%d,\"records\":%d,\"non_music\":%d,\"malformed\":%d,\"overlap_dropped\":%d,\"music_events\":%d,\"short_listens\":%d,\"plays\":%d}},",
 		esc(i.source), i.files_used, i.files_ignored, i.files_identical, i.records, i.non_music, i.malformed, i.overlap_dropped, i.music_events, i.short_listens, i.plays)
 

@@ -201,3 +201,24 @@ test_zip_rejects_hostile_names_and_damage :: proc(t: ^testing.T) {
 	testing.expect(t, !ok2)
 	testing.expect(t, strings.contains(r2.err, "ZIP"), r2.err)
 }
+
+@(test)
+test_history_with_nothing_to_report_says_why :: proc(t: ^testing.T) {
+	dir := fixture_dir("allshort")
+	write_fixture(dir, "Streaming_History_Audio_2023.json", fmt.tprintf("[%s,%s]", REC_B, REC_B))
+	r, ok := load_all({dir})
+	testing.expect(t, !ok)
+	testing.expect(t, strings.contains(r.err, "30 seconds"), r.err)
+
+	dir2 := fixture_dir("onlypod")
+	write_fixture(dir2, "Streaming_History_Audio_2023.json", fmt.tprintf("[%s]", REC_POD))
+	r2, ok2 := load_all({dir2})
+	testing.expect(t, !ok2)
+	testing.expect(t, strings.contains(r2.err, "no music"), r2.err)
+
+	dir3 := fixture_dir("emptyarr")
+	write_fixture(dir3, "Streaming_History_Audio_2023.json", "[]")
+	r3, ok3 := load_all({dir3})
+	testing.expect(t, !ok3)
+	testing.expect(t, strings.contains(r3.err, "no listening records"), r3.err)
+}
