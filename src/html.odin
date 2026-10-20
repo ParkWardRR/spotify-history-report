@@ -265,7 +265,12 @@ report_json :: proc(s: Stats) -> string {
 	return strings.to_string(j)
 }
 
-generate_report :: proc(s: Stats, output_path: string) -> bool {
+NOINDEX_ANCHOR :: `<meta charset="utf-8">`
+NOINDEX_REPLACEMENT :: `<meta charset="utf-8">` +
+	"\n    <meta name=\"robots\" content=\"noindex, nofollow, noarchive\">" +
+	"\n    <meta name=\"googlebot\" content=\"noindex, nofollow\">"
+
+generate_report :: proc(s: Stats, output_path: string, noindex: bool = false) -> bool {
 	data := report_json(s)
 	defer delete(data)
 
@@ -279,6 +284,17 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	strings.write_string(&result, tmpl[:marker_pos])
 	strings.write_string(&result, data)
 	strings.write_string(&result, tmpl[marker_pos + len(DATA_MARKER):])
+
+	// When --noindex is set, inject robots meta tags after the charset declaration.
+	if noindex {
+		html := strings.to_string(result)
+		replaced := strings.replace(html, NOINDEX_ANCHOR, NOINDEX_REPLACEMENT, 1)
+		if replaced != html {
+			strings.builder_destroy(&result)
+			result = strings.builder_make()
+			strings.write_string(&result, replaced)
+		}
+	}
 
 	return os.write_entire_file(output_path, transmute([]u8)strings.to_string(result)) == nil
 }

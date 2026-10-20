@@ -72,6 +72,8 @@ main :: proc() {
 			}
 		case a == "--timezone" || a == "--tz":
 			if i + 1 < len(args) { i += 1; cli_timezone = args[i] }
+		case a == "--noindex":
+			opts.noindex = true
 		case !strings.has_prefix(a, "-"):
 			// A trailing report.html is the output path (the old second argument).
 			if strings.has_suffix(strings.to_lower(a, context.temp_allocator), ".html") {
