@@ -190,6 +190,18 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 
 `scripts/build-release.sh vX.Y.Z` builds the four archives and `SHA256SUMS` into `dist/` — macOS natively, Linux in Ubuntu 22.04 containers (OrbStack or Docker).
 
+### Performance
+
+Measured with `scripts/bench.sh` on generated histories (about 8 years, a few percent short listens, a third of the `skipped` flags null). The whole pipeline, JSON parsing to finished report, single run:
+
+| Rows | JSON on disk | Apple M4 | Intel i7-13700T (Linux, in a container) | Peak memory |
+|-----:|-------------:|---------:|-------:|------------:|
+| 100,000 | 31 MB | 0.7 s | 1.0 s | about 110–150 MB |
+| 500,000 | 156 MB | 3.3 s | 5.3 s | about 370–470 MB |
+| 2,000,000 | 626 MB | 14.6 s | 24.2 s | about 1.4 GB |
+
+Memory grows with the history because each file is read whole. A real Extended Streaming History is typically a few hundred thousand rows. These are the numbers on those two machines, not a promise for yours; run the script to check.
+
 ### How metrics are computed
 
 | Metric | Method |
