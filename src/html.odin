@@ -250,31 +250,37 @@ NOINDEX_REPLACEMENT :: `<meta charset="utf-8">` +
 	"\n    <meta name=\"robots\" content=\"noindex, nofollow, noarchive\">" +
 	"\n    <meta name=\"googlebot\" content=\"noindex, nofollow\">"
 
-generate_report :: proc(s: Stats, output_path: string, noindex: bool = false) -> bool {
+// render_report fills the template; with noindex it also adds the robots meta
+// tags right after the charset declaration. The caller owns the result.
+render_report :: proc(s: Stats, noindex: bool) -> (html: string, ok: bool) {
 	data := report_json(s)
 	defer delete(data)
 
-	// Inject into template
 	tmpl := TEMPLATE
 	marker_pos := strings.index(tmpl, DATA_MARKER)
-	if marker_pos < 0 do return false
+	if marker_pos < 0 do return "", false
 
 	result := strings.builder_make()
-	defer strings.builder_destroy(&result)
 	strings.write_string(&result, tmpl[:marker_pos])
 	strings.write_string(&result, data)
 	strings.write_string(&result, tmpl[marker_pos + len(DATA_MARKER):])
+	html = strings.to_string(result)
 
-	// When --noindex is set, inject robots meta tags after the charset declaration.
 	if noindex {
-		html := strings.to_string(result)
-		replaced := strings.replace(html, NOINDEX_ANCHOR, NOINDEX_REPLACEMENT, 1)
-		if replaced != html {
-			strings.builder_destroy(&result)
-			result = strings.builder_make()
-			strings.write_string(&result, replaced)
+		if !strings.contains(html, NOINDEX_ANCHOR) {
+			delete(html)
+			return "", false
 		}
+		replaced, _ := strings.replace(html, NOINDEX_ANCHOR, NOINDEX_REPLACEMENT, 1)
+		delete(html)
+		html = replaced
 	}
+	return html, true
+}
 
-	return os.write_entire_file(output_path, transmute([]u8)strings.to_string(result)) == nil
+generate_report :: proc(s: Stats, output_path: string, noindex: bool = false) -> bool {
+	html, ok := render_report(s, noindex)
+	if !ok do return false
+	defer delete(html)
+	return os.write_entire_file(output_path, transmute([]u8)html) == nil
 }
