@@ -14,7 +14,7 @@ REC_POD :: `{"ts":"2023-05-01T11:00:00Z","ms_played":900000,"master_metadata_tra
 fixture_dir :: proc(name: string) -> string {
 	base := os.temp_directory(context.temp_allocator) or_else "/tmp"
 	dir := fmt.aprintf("%s/shr_input_%s", base, name)
-	os.remove_all(dir)
+	rm_rf(dir)
 	_ = os.make_directory_all(dir)
 	return dir
 }
