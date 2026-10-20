@@ -31,6 +31,16 @@ run America/Los_Angeles "$WORK/a.html" | sed 's/\x1b\[[0-9;]*m//g' | tee "$WORK/
 run America/Los_Angeles "$WORK/b.html" >/dev/null
 run Europe/Berlin "$WORK/c.html" >/dev/null
 
+# A history with no genres and no key must still produce a report.
+mkdir "$WORK/bare"
+cp "$ROOT"/sample/Streaming_History_Audio_*.json "$WORK/bare/"
+env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/home" "$BIN" "$WORK/bare" --plain -o "$WORK/bare.html" >"$WORK/bare.log" 2>&1 \
+	|| { cat "$WORK/bare.log"; echo "smoke: FAIL: report without genres or a key" >&2; exit 1; }
+grep -q "enrichment off" "$WORK/bare.log" || { echo "smoke: FAIL: enrichment-off not reported" >&2; exit 1; }
+# A key in the environment is not consent: without --enrich nothing may be sent.
+ANTHROPIC_API_KEY=sk-ant-invalid HOME="$WORK/home" "$BIN" "$WORK/bare" --plain -o "$WORK/bare2.html" 2>&1 | grep -q "enrichment off" \
+	|| { echo "smoke: FAIL: a key alone enabled enrichment" >&2; exit 1; }
+
 fail() { echo "smoke: FAIL: $*" >&2; exit 1; }
 
 grep -q "Report ready" "$WORK/a.log" || fail "pipeline did not finish"

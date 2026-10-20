@@ -15,7 +15,7 @@
 
 <p align="center">
   <strong>Turn your Spotify data export into a beautiful, interactive HTML report.</strong><br>
-  No account access needed. Nothing leaves your machine. One binary, zero dependencies.
+  No account access needed. Your listening history is processed locally. One binary, zero dependencies.
 </p>
 
 <p align="center">
@@ -53,7 +53,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | **Top albums** | Best albums by total listening time |
 | **Never-skipped** | Songs with 15+ plays and zero skips — pure commitment |
 | **Favourites, obsessions, rediscoveries** | Long-term favourites, what you're bingeing now, and old favourites you've forgotten, as separate lists |
-| **Genre evolution** | Stacked area chart of genre share over time (requires LLM) |
+| **Genre evolution** | Stacked area chart of genre share over time (needs genre annotations; optional LLM enrichment, off by default) |
 | **Heatmap** | When you listen — day of week × hour of day |
 
 ## Quick start
@@ -82,22 +82,19 @@ odin build src/ -out:spotify-history-report -o:speed
 
 That's it. Open `spotify_report.html` in your browser.
 
-### 4. Configure an LLM API key
+### 4. Optional: fill in genres with an LLM
 
-Genre classification uses an LLM for artists that have no genre yet. Provide an API key via environment variable, CLI flag, or config file:
+The report needs no key. Artists without a genre show up as *Unclassified*, and everything else works. If you want the genre charts filled in, you can opt in to **genre enrichment**, which sends **artist names only** (never plays, timestamps or anything else from your export) to the provider you pick. It is off unless you ask for it:
 
 ```bash
-# Environment variable (easiest)
-ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_data/
+# One run, explicit opt-in
+ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_data/ --enrich
 
-# CLI flag
-./spotify-history-report ~/Downloads/my_spotify_data/ --anthropic-key sk-ant-...
-
-# Interactive config setup (saves to ~/.config/spotify-history-report/config.json)
+# Interactive config setup: saving a key switches enrichment on for every run
 ./spotify-history-report --setup
 ```
 
-Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant.
+Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant. A key that is merely present in your environment is never used without `--enrich` (or a saved `--setup`).
 
 ---
 
@@ -276,7 +273,7 @@ Three rules keep it honest:
 - **You always win.** Decisions in `.shr/overrides.json` beat every other source, at artist or track level, and a later LLM run can never replace them. Among the other sources a more specific track-level annotation beats an artist-level one; for the same target the most recent observation of the same source wins.
 - **An unreadable store is never overwritten.** If `.shr/annotations.json` is damaged the run stops and says so.
 
-When an LLM key is available the tool sends your artist names (never your listening history) in batches of 150 and asks for one of 14 genres: Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other. It only asks about artists that have no genre yet, so reruns and new exports cost nothing for what is already known. **If every artist already has a genre, no key is needed at all.**
+When enrichment is on (`--enrich`, or a key saved by `--setup`) the tool sends your artist names (never your listening history) in batches of 150 and asks for one of 14 genres: Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other. It only asks about artists that have no genre yet, so reruns and new exports cost nothing for what is already known. **Without `--enrich`, nothing is sent and unannotated artists stay *Unclassified*.**
 
 ```bash
 ./spotify-history-report ~/Downloads/my_spotify_data/ --annotations   # coverage + biggest gaps, no LLM
@@ -317,7 +314,7 @@ playlist ordering.
 
 ## Privacy
 
-- **Your data never leaves your machine.** The tool reads local JSON files and writes a local HTML file. The only network calls are to the LLM API — and those only send artist names, not your listening history.
+- **Your listening history is processed locally.** The tool reads local JSON files and writes a local HTML file. Optional genre enrichment sends artist names to the provider you choose. Enrichment is off by default, and it is the only network call the tool ever makes.
 - **The HTML report is self-contained.** No analytics, no external requests, no tracking pixels. Open it offline.
 - **The sample data uses fictional artists.** No real listening history is included in this repository.
 

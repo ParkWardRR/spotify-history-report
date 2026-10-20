@@ -60,6 +60,7 @@ Run_Opts :: struct {
 	model:       string,
 	timezone:    string, // IANA name; empty means the default
 	decay:       f64,    // memory decay for the behaviour scores; 0 means the default
+	enrich:      bool,   // allow sending artist names to the LLM provider (off by default)
 }
 
 emit: proc(msg: Msg) = proc(msg: Msg) {}
@@ -220,12 +221,8 @@ run_pipeline :: proc(o: Run_Opts) {
 	existing := len(resolver.by_artist)
 	added := 0
 	dirty := store_info.migrated // a legacy cache was imported and should be saved
-	if len(artist_list) > 0 {
-		if o.provider == .None {
-			fail(.Genres, fmt.aprintf("%s artists have no genre and no LLM API key is set", fmt_int(len(artist_list))),
-				"Run --setup to configure a key, pass --anthropic-key / --openai-key / --openrouter-key, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY. Or classify them yourself in .shr/overrides.json (run --annotations to see which).")
-			return
-		}
+	can_enrich := o.enrich && o.provider != .None
+	if len(artist_list) > 0 && can_enrich {
 		stage_msg(.Genres, .Active,
 			fmt.aprintf("%s · %s", provider_name(o.provider), o.model),
 			0, (len(artist_list) + BATCH_SIZE - 1) / BATCH_SIZE)
@@ -241,7 +238,11 @@ run_pipeline :: proc(o: Run_Opts) {
 	detail := fmt.aprintf("%s artists annotated", fmt_int(len(resolver.by_artist)))
 	if existing > 0 && added == 0 do detail = fmt.aprintf("%s artists annotated (stored)", fmt_int(existing))
 	if added > 0 do detail = fmt.aprintf("%s from storage · %s new via %s", fmt_int(existing), fmt_int(added), provider_name(o.provider))
-	if len(artist_list) > added do detail = fmt.aprintf("%s · %d still unclassified", detail, len(artist_list) - added)
+	if len(artist_list) > added do detail = fmt.aprintf("%s · %s unclassified", detail, fmt_int(len(artist_list) - added))
+	if len(artist_list) > 0 && !can_enrich {
+		// Never a failure: the core report needs no genres, and Unclassified is a result.
+		detail = fmt.aprintf("%s · enrichment off, nothing sent anywhere", detail)
+	}
 	if store_info.migrated && len(store.migrated_from) > 0 do detail = fmt.aprintf("%s · imported %s", detail, store.migrated_from)
 	if resolver.user_artists + resolver.user_tracks > 0 {
 		detail = fmt.aprintf("%s · %d of yours", detail, resolver.user_artists + resolver.user_tracks)

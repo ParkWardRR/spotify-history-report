@@ -14,6 +14,7 @@ main :: proc() {
 	identities_only := false
 	scores_only := false
 	annotations_only := false
+	enrich_flag := false
 
 	for a in args[1:] {
 		switch a {
@@ -34,6 +35,8 @@ main :: proc() {
 			scores_only = true
 		case "--annotations":
 			annotations_only = true
+		case "--enrich":
+			enrich_flag = true
 		}
 	}
 
@@ -95,6 +98,7 @@ main :: proc() {
 	opts.provider, opts.api_key, opts.model = resolve_provider(cfg)
 	opts.timezone = resolve_timezone(cli_timezone, cfg)
 	opts.decay = cli_decay
+	opts.enrich = enrich_flag || cfg.enrich
 	if decay_bad {
 		fmt.eprintfln("--decay needs a number between %.2f and %.1f", MIN_DECAY, MAX_DECAY)
 		os.exit(2)

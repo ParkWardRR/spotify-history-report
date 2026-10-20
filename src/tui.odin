@@ -34,6 +34,7 @@ print_usage :: proc() {
 		"",
 		heading("Options"),
 		opt_line("-o, --output <file>", "Output HTML path", "(default: spotify_report.html)"),
+		opt_line("--enrich", "Send artist names to your LLM provider to fill in genres", "(off by default)"),
 		opt_line("--openai-key <key>", "OpenAI API key for genre classification"),
 		opt_line("--anthropic-key <key>", "Anthropic API key", "(Claude)"),
 		opt_line("--openrouter-key <key>", "OpenRouter API key", "(any model)"),
@@ -55,8 +56,8 @@ print_usage :: proc() {
 		"",
 		heading("Examples"),
 		fmt.tprintf("    %s spotify-history-report ~/Downloads/spotify_data/", muted("$")),
-		fmt.tprintf("    %s spotify-history-report ./data --anthropic-key sk-ant-... -o report.html", muted("$")),
-		fmt.tprintf("    %s OPENAI_API_KEY=sk-... spotify-history-report ./data", muted("$")),
+		fmt.tprintf("    %s spotify-history-report ./data --enrich --anthropic-key sk-ant-... -o report.html", muted("$")),
+		fmt.tprintf("    %s OPENAI_API_KEY=sk-... spotify-history-report ./data --enrich", muted("$")),
 		"",
 	)
 }
