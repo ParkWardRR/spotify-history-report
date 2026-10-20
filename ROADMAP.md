@@ -195,8 +195,9 @@ by fingerprint and not at all.
   unresolved tier, near-duplicate and version-family candidates (proposed,
   never merged), `.shr/overrides.json` merges and `keep_separate`, the
   `.shr/identities.json` cache, an `Identity` pipeline stage, a Library-tab
-  section and `--identities`. The report still counts a *song* as exact title +
-  artist, so nothing about existing metrics changed.
+  section and `--identities`. Statistics now key on the identity: a URI is one
+  track (renamed catalogue entries are unified under the most-played spelling)
+  and two URIs with the same title are two tracks until an override merges them.
 - **1b (planned):** opt-in MusicBrainz lookups (descriptive User-Agent, ~1
   req/s, cached and resumable, `--no-network` kill switch), then AcoustID for
   local audio. Both fill the `mbid`/fingerprint tiers the report already shows
@@ -211,8 +212,10 @@ by fingerprint and not at all.
 - Near-duplicates require the same normalised *full* title. An earlier draft
   grouped by "same version markers", which would have proposed
   `Song (Live in Paris)` and `Song (Live in Tokyo)` as one recording.
-- A URI shared by several spellings is reported but not merged; the metrics
-  key on text, so such a URI's plays split across its spellings.
+- Statistics key on (title, artist, URI). A URI shared by several spellings is
+  unified under its most-played spelling before anything is counted, so it never
+  splits; different URIs with equal text stay apart and are listed by
+  `--identities` with a merge line, rather than being merged on a guess.
 - Overrides are validated strictly (unknown keys, half-specified references,
   unknown URIs, cycles) because silently ignoring a user's decision is worse
   than stopping.

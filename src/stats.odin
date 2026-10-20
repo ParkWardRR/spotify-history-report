@@ -4,19 +4,29 @@ import "core:fmt"
 import "core:slice"
 import "core:strings"
 
+// What a statistic counts as "one track". With a Spotify URI that is the URI's
+// identity: two URIs are two tracks even when their titles match (an album cut
+// and a compilation cut, a live take, a remaster), and `merges` in
+// .shr/overrides.json is how the user says otherwise. Plays that carry the same
+// URI always carry the same title and artist (see `canonicalize_uri_names`), so
+// renamed catalogue entries never split. Without a URI the key is the exact
+// title and artist text and `uri` is empty. Album keys reuse the type as
+// (album, artist, "").
 Track_Key :: struct {
 	track:  string,
 	artist: string,
+	uri:    string,
 }
 
-// The one place a play is mapped to a track key. Today that is (title, artist);
-// the identity layer (ROADMAP Phase 1) will switch this to canonical ids.
-track_key :: proc(track, artist, uri: string) -> Track_Key {
-	return Track_Key{track, artist}
-}
-
+// The one place a play is mapped to a track key.
 play_key :: proc(p: Play) -> Track_Key {
-	return track_key(p.track, p.artist, p.uri)
+	return Track_Key{p.track, p.artist, p.uri}
+}
+
+// A play's exact title and artist text, ignoring its URI: what the identity
+// review calls a "song".
+text_key :: proc(p: Play) -> Track_Key {
+	return Track_Key{p.track, p.artist, ""}
 }
 
 // Skipping is tracked over every record with a track and artist, including the
@@ -72,7 +82,8 @@ densest_window :: proc(ords: []i64, days: i64) -> (best_count, best_idx: int) {
 ranks_before :: proc(a_n: int, a_k: Track_Key, b_n: int, b_k: Track_Key) -> bool {
 	if a_n != b_n do return a_n > b_n
 	if a_k.artist != b_k.artist do return a_k.artist < b_k.artist
-	return a_k.track < b_k.track
+	if a_k.track != b_k.track do return a_k.track < b_k.track
+	return a_k.uri < b_k.uri
 }
 
 compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
@@ -122,7 +133,7 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 	defer delete(album_ms)
 	for &p in plays {
 		if len(p.album) > 0 {
-			album_ms[Track_Key{p.album, p.artist}] += p.ms
+			album_ms[Track_Key{p.album, p.artist, ""}] += p.ms
 		}
 	}
 	stats.top_albums = top_n_albums(album_ms, 15)
@@ -164,11 +175,11 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 		skip_count := track_skips[k]
 		if tally != nil do skip_count += tally.track_skips[k]
 		if count >= 15 && skip_count == 0 {
-			append(&ns, Track_Stat{k.track, k.artist, count})
+			append(&ns, Track_Stat{k.track, k.artist, count, k.uri})
 		}
 	}
 	slice.sort_by(ns[:], proc(a, b: Track_Stat) -> bool {
-		return ranks_before(a.plays, Track_Key{a.track, a.artist}, b.plays, Track_Key{b.track, b.artist})
+		return ranks_before(a.plays, Track_Key{a.track, a.artist, a.uri}, b.plays, Track_Key{b.track, b.artist, b.uri})
 	})
 	for i in 0..<min(10, len(ns)) {
 		append(&stats.never_skipped, ns[i])
@@ -185,7 +196,7 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 			best_count = c; best_track = k
 		}
 	}
-	stats.most_played_song = Track_Stat{best_track.track, best_track.artist, best_count}
+	stats.most_played_song = Track_Stat{best_track.track, best_track.artist, best_count, best_track.uri}
 
 	// Biggest listening day
 	day_plays: map[string]int
@@ -398,7 +409,7 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 			if best_count >= 5 {
 				month_names := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 				period := fmt.aprintf("%s %d", month_names[days[best_idx].month], days[best_idx].year)
-				append(&earworm_list, Earworm_Stat{k.track, k.artist, best_count, period})
+				append(&earworm_list, Earworm_Stat{k.track, k.artist, best_count, period, k.uri})
 			}
 			if best_count >= 15 {
 				earworm_total_count += 1
@@ -406,7 +417,7 @@ compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 		}
 
 		slice.sort_by(earworm_list[:], proc(a, b: Earworm_Stat) -> bool {
-			return ranks_before(a.plays, Track_Key{a.track, a.artist}, b.plays, Track_Key{b.track, b.artist})
+			return ranks_before(a.plays, Track_Key{a.track, a.artist, a.uri}, b.plays, Track_Key{b.track, b.artist, b.uri})
 		})
 
 		stats.earworm_total = earworm_total_count
@@ -777,10 +788,10 @@ top_n_openers :: proc(m: map[Track_Key]int, n: int) -> [dynamic]Opener_Stat {
 	items: [dynamic]Opener_Stat
 	defer delete(items)
 	for k, c in m {
-		if c > 0 { append(&items, Opener_Stat{k.track, k.artist, c}) }
+		if c > 0 { append(&items, Opener_Stat{k.track, k.artist, c, k.uri}) }
 	}
 	slice.sort_by(items[:], proc(a, b: Opener_Stat) -> bool {
-		return ranks_before(a.count, Track_Key{a.track, a.artist}, b.count, Track_Key{b.track, b.artist})
+		return ranks_before(a.count, Track_Key{a.track, a.artist, a.uri}, b.count, Track_Key{b.track, b.artist, b.uri})
 	})
 	result: [dynamic]Opener_Stat
 	for i in 0..<min(n, len(items)) {

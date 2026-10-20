@@ -240,7 +240,7 @@ Every play is matched to a Spotify track URI from your export, and the tool is e
 - **Text only** — records without a URI are kept by exact title + artist and reported as unresolved.
 - **Nothing is merged on fuzzy evidence.** Songs that differ only in case or punctuation (`Don't Stop` / `Dont Stop`) are listed as *near-duplicates* to review; songs that share a base title but are different versions (`Live`, `Remastered`, `Instrumental`, `Karaoke`, `Acoustic`, `Demo`, `Edit`, `Remix`, `Mono`/`Stereo`) are listed as *version families* and are never proposed as one recording. Accents are not folded either.
 
-The report counts a *song* as exact title + artist text, so one song released on an album and a compilation (two URIs) counts once, while a URI whose track was renamed counts under each spelling.
+**The report counts a URI as one track.** The same title on an album and on a compilation is two URIs and therefore two tracks, because "same title" is not "same recording" (live takes, remasters and re-recordings can share one). A URI whose catalogue entry was renamed over the years is one track under its most-played spelling. `--identities` lists every title that appears under several URIs, with a ready-to-paste merge line, so a favourite that looks under-counted is one edit away from being joined.
 
 ```bash
 ./spotify-history-report ~/Downloads/my_spotify_data/ --identities   # coverage + review list, no LLM needed
@@ -262,7 +262,7 @@ This also writes `.shr/identities.json` next to your data (a derived cache; safe
 }
 ```
 
-A reference is either a `uri` or both `artist` and `title`. Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
+A reference is either a `uri` (exactly that URI) or both `artist` and `title` (every URI carrying that text; as the `into` side it stands for the most-played of them and pulls the others in). Merges rewrite the plays on every run (your export is never modified), so deleting the file undoes them. `keep_separate` hides a pair from the review list. A typo in a key or an impossible merge stops the run with a message instead of being ignored. MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 
 ## Genre classification
 

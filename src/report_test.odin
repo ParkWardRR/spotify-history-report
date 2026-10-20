@@ -14,14 +14,14 @@ test_report_json_is_valid_and_script_safe_for_hostile_metadata :: proc(t: ^testi
 	s.timezone = HOSTILE
 	s.date_range_start = HOSTILE
 	s.peak_day = HOSTILE
-	s.most_played_song = Track_Stat{HOSTILE, HOSTILE, 3}
-	s.worst_earworm = Earworm_Stat{HOSTILE, HOSTILE, 9, HOSTILE}
+	s.most_played_song = Track_Stat{HOSTILE, HOSTILE, 3, ""}
+	s.worst_earworm = Earworm_Stat{HOSTILE, HOSTILE, 9, HOSTILE, ""}
 	s.biggest_day = Day_Stat{HOSTILE, 1, 1}
 	append(&s.top_artists, Artist_Stat{HOSTILE, 1})
 	append(&s.top_albums, Album_Stat{HOSTILE, HOSTILE, 1})
-	append(&s.session_openers, Opener_Stat{HOSTILE, HOSTILE, 1})
-	append(&s.never_skipped, Track_Stat{HOSTILE, HOSTILE, 15})
-	append(&s.earworms, Earworm_Stat{HOSTILE, HOSTILE, 5, HOSTILE})
+	append(&s.session_openers, Opener_Stat{HOSTILE, HOSTILE, 1, ""})
+	append(&s.never_skipped, Track_Stat{HOSTILE, HOSTILE, 15, ""})
+	append(&s.earworms, Earworm_Stat{HOSTILE, HOSTILE, 5, HOSTILE, ""})
 	append(&s.loyalists, Artist_Stat{HOSTILE, 1})
 	append(&s.platforms, Platform_Stat{HOSTILE, 1})
 	append(&s.genre_order, HOSTILE)

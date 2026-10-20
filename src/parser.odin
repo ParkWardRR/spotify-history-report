@@ -145,12 +145,14 @@ Track_Stat :: struct {
 	track:  string,
 	artist: string,
 	plays:  int,
+	uri:    string, // only to order two tracks that share a title and artist
 }
 
 Opener_Stat :: struct {
 	track:  string,
 	artist: string,
 	count:  int,
+	uri:    string,
 }
 
 Day_Stat :: struct {
@@ -164,6 +166,7 @@ Earworm_Stat :: struct {
 	artist:  string,
 	plays:   int,
 	period:  string,
+	uri:     string,
 }
 
 JSON_HM :: struct {

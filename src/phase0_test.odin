@@ -271,7 +271,7 @@ test_explore_obsess_buckets_are_a_partition :: proc(t: ^testing.T) {
 test_explicit_skips_and_short_listens_are_reported_separately :: proc(t: ^testing.T) {
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	key := Track_Key{"A", "X"}
+	key := Track_Key{"A", "X", ""}
 	tally_record(&tally, 2020, key, .No, 200000)
 	tally_record(&tally, 2020, key, .No, 200000)
 	tally_record(&tally, 2020, key, .Yes, 200000)  // skipped flag
@@ -291,7 +291,7 @@ test_explicit_skips_and_short_listens_are_reported_separately :: proc(t: ^testin
 test_null_skipped_flag_is_unknown_not_false :: proc(t: ^testing.T) {
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	key := Track_Key{"A", "X"}
+	key := Track_Key{"A", "X", ""}
 	// A year where Spotify left the flag out: short listens are still observable,
 	// explicit skips are not, and must not be reported as 0%.
 	for _ in 0..<3 do tally_record(&tally, 2023, key, .Unknown, 200000)
@@ -333,7 +333,7 @@ test_never_skipped_ignores_tracks_with_short_plays :: proc(t: ^testing.T) {
 
 	tally: Skip_Tally
 	defer skip_tally_destroy(&tally)
-	tally_record(&tally, 2020, Track_Key{"Song", "Art"}, .No, 5000) // a sub-30s play that was filtered out
+	tally_record(&tally, 2020, Track_Key{"Song", "Art", ""}, .No, 5000) // a sub-30s play that was filtered out
 	with_tally := compute_stats(plays[:], &tally)
 	testing.expect_value(t, len(with_tally.never_skipped), 0)
 }

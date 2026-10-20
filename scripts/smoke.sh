@@ -96,6 +96,29 @@ d = json.loads(re.search(r"const DATA\s*=\s*(\{.*?\});\s*\n", evil, re.S).group(
 assert any("</script>" in a["name"] for a in d["top_artists"]), "hostile name lost"
 PY
 
+# One title under two URIs: counted apart until an override joins them.
+mkdir "$WORK/uris"
+python3 -I - "$WORK/uris" <<'PY'
+import json, sys
+rows = [{"ts": f"2023-05-0{i+1}T10:00:00Z", "ms_played": 200000, "master_metadata_track_name": "Hit",
+         "master_metadata_album_artist_name": "X", "master_metadata_album_album_name": "Alb" + u,
+         "spotify_track_uri": "spotify:track:" + u, "skipped": None} for i, u in enumerate(["aaa", "bbb", "aaa", "bbb", "bbb"])]
+json.dump(rows, open(sys.argv[1] + "/Streaming_History_Audio_a.json", "w"))
+PY
+most_played() { python3 -I - "$1" <<'PY'
+import json, re, sys
+d = json.loads(re.search(r"const DATA\s*=\s*(\{.*?\});\s*\n", open(sys.argv[1]).read(), re.S).group(1))
+print(d["most_played_song"]["plays"], d["unique_tracks"])
+PY
+}
+env -u ANTHROPIC_API_KEY HOME="$WORK/home" "$BIN" "$WORK/uris" --plain -o "$WORK/u1.html" >/dev/null 2>&1 || fail "uri fixture"
+[ "$(most_played "$WORK/u1.html")" = "3 2" ] || fail "two URIs of one title should be counted apart"
+"$BIN" "$WORK/uris" --identities | grep -q "Same title under several URIs" || fail "--identities does not list multi-URI songs"
+mkdir -p "$WORK/uris/.shr"
+echo '{"merges":[{"from":{"uri":"spotify:track:aaa"},"into":{"uri":"spotify:track:bbb"}}]}' > "$WORK/uris/.shr/overrides.json"
+env -u ANTHROPIC_API_KEY HOME="$WORK/home" "$BIN" "$WORK/uris" --plain -o "$WORK/u2.html" >/dev/null 2>&1 || fail "uri fixture with merge"
+[ "$(most_played "$WORK/u2.html")" = "5 1" ] || fail "the merge override did not join the two URIs"
+
 # A non-history input fails with a plain message and a non-zero exit.
 echo '{"x":1}' > "$WORK/Other.json"
 if "$BIN" "$WORK/Other.json" --plain -o "$WORK/no.html" >"$WORK/no.log" 2>&1; then echo "smoke: FAIL: non-history input accepted" >&2; exit 1; fi

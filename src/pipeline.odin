@@ -209,6 +209,8 @@ no_history_message :: proc(entries: []Input_Entry, sum: Import_Summary) -> (err,
 resolve_identities :: proc(plays: []Play, ov: Overrides, tally: ^Skip_Tally = nil) -> (table: Identity_Table, err: string) {
 	ov := ov
 	table = build_identity_table(plays, &ov)
+	// One URI is one track, whatever spellings it carries (see Track_Key).
+	canonicalize_uri_names(plays, table, tally)
 	if len(ov.merges) == 0 do return
 
 	changed, apply_err := apply_overrides(plays, ov, table, tally)
