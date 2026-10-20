@@ -6,6 +6,7 @@
 # Every artist is pre-classified through a legacy genre cache, so no LLM key is
 # needed and no request is ever made. It then checks the report that comes out.
 set -euo pipefail
+fail() { echo "smoke: FAIL: $*" >&2; exit 1; }
 
 BIN="$(cd "$(dirname "${1:?usage: smoke.sh <binary>}")" && pwd)/$(basename "$1")"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,14 +60,47 @@ env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/hom
 grep -q "1 other JSON file ignored" "$WORK/z.log" || { cat "$WORK/z.log"; echo "smoke: FAIL: ZIP import notes missing" >&2; exit 1; }
 [ ! -e "$WORK/zipdir/Spotify Extended Streaming History" ] || { echo "smoke: FAIL: ZIP was extracted to disk" >&2; exit 1; }
 env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY HOME="$WORK/home" "$BIN" "$WORK/bare" --plain --timezone America/Los_Angeles -o "$WORK/f.html" >/dev/null 2>&1
-cmp -s "$WORK/z.html" "$WORK/f.html" || { echo "smoke: FAIL: ZIP and folder give different reports" >&2; exit 1; }
+# Same data; only the import description (ZIP vs folder, ignored files) may differ.
+python3 -I - "$WORK/z.html" "$WORK/f.html" <<'PY' || fail "ZIP and folder give different reports"
+import json, re, sys
+def data(p):
+    d = json.loads(re.search(r"const DATA\s*=\s*(\{.*?\});\s*\n", open(p).read(), re.S).group(1))
+    imp = d.pop("import")
+    return d, imp
+(a, ia), (b, ib) = data(sys.argv[1]), data(sys.argv[2])
+assert a == b, "reports differ beyond the import summary"
+assert ia["source"] == "ZIP" and ib["source"] == "folder", (ia["source"], ib["source"])
+assert ia["files_ignored"] == 1 and ib["files_ignored"] == 0, (ia, ib)
+PY
+
+# Hostile metadata must not escape the embedded data or the page.
+mkdir "$WORK/evil"
+python3 -I - "$ROOT" "$WORK/evil" <<'PY'
+import glob, json, sys
+root, out = sys.argv[1:3]
+for f in glob.glob(f"{root}/sample/Streaming_History_Audio_*.json"):
+    rows = json.load(open(f))
+    for r in rows:
+        if r.get("master_metadata_album_artist_name") == "Bronze Atlas":
+            r["master_metadata_album_artist_name"] = "</script><img src=x onerror=alert(1)>\u2028\x01"
+            r["master_metadata_track_name"] = "<b>\"quoted\"</b> & \\"
+    json.dump(rows, open(out + "/Streaming_History_Audio_evil.json", "w"))
+PY
+env -u ANTHROPIC_API_KEY HOME="$WORK/home" "$BIN" "$WORK/evil" --plain --timezone UTC -o "$WORK/evil.html" >/dev/null 2>&1 || fail "report with hostile metadata"
+python3 -I - "$WORK/evil.html" "$WORK/bare.html" <<'PY'
+import json, re, sys
+evil, ok = (open(p).read() for p in sys.argv[1:3])
+assert evil.count("</script>") == ok.count("</script>"), "imported text closed a script element"
+assert "<img src=x" not in evil, "markup from the export reached the page unescaped"
+d = json.loads(re.search(r"const DATA\s*=\s*(\{.*?\});\s*\n", evil, re.S).group(1))
+assert any("</script>" in a["name"] for a in d["top_artists"]), "hostile name lost"
+PY
 
 # A non-history input fails with a plain message and a non-zero exit.
 echo '{"x":1}' > "$WORK/Other.json"
 if "$BIN" "$WORK/Other.json" --plain -o "$WORK/no.html" >"$WORK/no.log" 2>&1; then echo "smoke: FAIL: non-history input accepted" >&2; exit 1; fi
 grep -q "None of the JSON files" "$WORK/no.log" || { cat "$WORK/no.log"; echo "smoke: FAIL: no explanation for non-history input" >&2; exit 1; }
 
-fail() { echo "smoke: FAIL: $*" >&2; exit 1; }
 
 grep -q "Report ready" "$WORK/a.log" || fail "pipeline did not finish"
 grep -q "America/Los_Angeles" "$WORK/a.log" || fail "timezone not reported"

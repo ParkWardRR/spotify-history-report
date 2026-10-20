@@ -7,6 +7,27 @@ import "core:strings"
 TEMPLATE :: string(#load("../template/report.html"))
 DATA_MARKER :: "/*DATA_PLACEHOLDER*/{}"
 
+// Escapes `s` for use inside a JSON string that is embedded in an HTML
+// <script>. Beyond JSON's own rules (quote, backslash, every control character)
+// it also writes `<`, `>`, `&` and the line separators U+2028/2029 as \u escapes,
+// so no imported text can close the script element or start a comment in it.
+json_html_safe :: proc(s: string) -> string {
+	b := strings.builder_make()
+	for c in s {
+		switch c {
+		case '"':  strings.write_string(&b, "\\\"")
+		case '\\': strings.write_string(&b, "\\\\")
+		case '\n': strings.write_string(&b, "\\n")
+		case '\r': strings.write_string(&b, "\\r")
+		case '\t': strings.write_string(&b, "\\t")
+		case 0 ..< 0x20, '<', '>', '&', 0x7f, 0x2028, 0x2029:
+			strings.write_string(&b, fmt.tprintf("\\u%04x", int(c)))
+		case: strings.write_rune(&b, c)
+		}
+	}
+	return strings.to_string(b)
+}
+
 // The DATA blob embedded in the report, as JSON text.
 report_json :: proc(s: Stats) -> string {
 	j := strings.builder_make()
@@ -16,19 +37,7 @@ report_json :: proc(s: Stats) -> string {
 		strings.write_string(b, fmt.aprintf(f, ..args))
 	}
 
-	esc :: proc(s: string) -> string {
-		b := strings.builder_make()
-		for c in s {
-			switch c {
-			case '"':  strings.write_string(&b, "\\\"")
-			case '\\': strings.write_string(&b, "\\\\")
-			case '\n': strings.write_string(&b, "\\n")
-			case '\t': strings.write_string(&b, "\\t")
-			case:      strings.write_rune(&b, c)
-			}
-		}
-		return strings.to_string(b)
-	}
+	esc :: json_html_safe
 
 	w(&j, "{")
 	wf(&j, "\"total_plays\":%d,", s.total_plays)
@@ -38,12 +47,12 @@ report_json :: proc(s: Stats) -> string {
 	wf(&j, "\"unique_artists\":%d,", s.unique_artists)
 	wf(&j, "\"unique_tracks\":%d,", s.unique_tracks)
 	wf(&j, "\"n_years\":%d,", s.n_years)
-	wf(&j, "\"date_range_start\":\"%s\",", s.date_range_start)
-	wf(&j, "\"date_range_end\":\"%s\",", s.date_range_end)
+	wf(&j, "\"date_range_start\":\"%s\",", esc(s.date_range_start))
+	wf(&j, "\"date_range_end\":\"%s\",", esc(s.date_range_end))
 	wf(&j, "\"longest_streak\":%d,", s.longest_streak)
 	wf(&j, "\"peak_hour\":%d,", s.peak_hour)
 	wf(&j, "\"peak_hour_val\":%d,", s.peak_hour_val)
-	wf(&j, "\"peak_day\":\"%s\",", s.peak_day)
+	wf(&j, "\"peak_day\":\"%s\",", esc(s.peak_day))
 	wf(&j, "\"loyal_count\":%d,", s.loyal_count)
 	wf(&j, "\"peak_day_hours\":%d,", s.peak_day_hours)
 	wf(&j, "\"genre_subtitle\":\"Quarterly share of listening time by genre.\",")
@@ -78,7 +87,7 @@ report_json :: proc(s: Stats) -> string {
 	wf(&j, "\"earworm_total\":%d,", s.earworm_total)
 	if len(s.worst_earworm.track) > 0 {
 		wf(&j, "\"worst_earworm\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}},",
-			esc(s.worst_earworm.track), esc(s.worst_earworm.artist), s.worst_earworm.plays, s.worst_earworm.period)
+			esc(s.worst_earworm.track), esc(s.worst_earworm.artist), s.worst_earworm.plays, esc(s.worst_earworm.period))
 	}
 
 	if s.last_year_partial {
@@ -90,6 +99,9 @@ report_json :: proc(s: Stats) -> string {
 	w(&j, "\"identity\":")
 	summary_json(&j, s.identity)
 	w(&j, ",")
+	i := s.import_summary
+	wf(&j, "\"import\":{{\"source\":\"%s\",\"files_used\":%d,\"files_ignored\":%d,\"files_identical\":%d,\"records\":%d,\"non_music\":%d,\"malformed\":%d,\"overlap_dropped\":%d,\"music_events\":%d,\"short_listens\":%d,\"plays\":%d}},",
+		esc(i.source), i.files_used, i.files_ignored, i.files_identical, i.records, i.non_music, i.malformed, i.overlap_dropped, i.music_events, i.short_listens, i.plays)
 
 	// Listening-behaviour views, each with its own plain-English definition.
 	score_list :: proc(j: ^strings.Builder, name, why: string, list: []Track_Score, esc: proc(string) -> string) {
@@ -117,7 +129,7 @@ report_json :: proc(s: Stats) -> string {
 
 	// Biggest day
 	wf(&j, "\"biggest_day\":{{\"date\":\"%s\",\"plays\":%d,\"hours\":%.1f}},",
-		s.biggest_day.date, s.biggest_day.plays, s.biggest_day.hours)
+		esc(s.biggest_day.date), s.biggest_day.plays, s.biggest_day.hours)
 
 	// Hours by year
 	w(&j, "\"hours_by_year\":[")
@@ -163,7 +175,7 @@ report_json :: proc(s: Stats) -> string {
 	w(&j, "\"earworms\":[")
 	for &e, i in s.earworms {
 		if i > 0 do w(&j, ",")
-		wf(&j, "{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}}", esc(e.track), esc(e.artist), e.plays, e.period)
+		wf(&j, "{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"period\":\"%s\"}}", esc(e.track), esc(e.artist), e.plays, esc(e.period))
 	}
 	w(&j, "],")
 
@@ -207,7 +219,7 @@ report_json :: proc(s: Stats) -> string {
 		c, has := s.genre_colors[g]
 		if !has do continue
 		if gi > 0 do w(&j, ",")
-		wf(&j, "\"%s\":\"%s\"", esc(g), c)
+		wf(&j, "\"%s\":\"%s\"", esc(g), esc(c))
 		gi += 1
 	}
 	w(&j, "},")
@@ -215,7 +227,7 @@ report_json :: proc(s: Stats) -> string {
 	w(&j, "\"genre_area\":[")
 	for &gq, qi in s.genre_area {
 		if qi > 0 do w(&j, ",")
-		wf(&j, "{{\"quarter\":\"%s\",\"partial\":%v", gq.quarter, gq.partial)
+		wf(&j, "{{\"quarter\":\"%s\",\"partial\":%v", esc(gq.quarter), gq.partial)
 		for &g in s.genre_order {
 			v: f64 = 0
 			if g in gq.values { v = gq.values[g] }

@@ -660,7 +660,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   stats1.forEach(s => {
     const div = document.createElement('div');
     div.className = 'stat';
-    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${s.value}</div><div class="stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${escapeHtml(s.value)}</div><div class="stat-label">${escapeHtml(s.label)}</div>`;
     sr1.appendChild(div);
   });
 
@@ -686,7 +686,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   stats2.forEach(s => {
     const div = document.createElement('div');
     div.className = 'stat';
-    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${s.value}</div><div class="stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="stat-value${s.cls ? ' '+s.cls : ''}">${escapeHtml(s.value)}</div><div class="stat-label">${escapeHtml(s.label)}</div>`;
     sr2.appendChild(div);
   });
 
@@ -719,7 +719,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   discStats.forEach(s => {
     const div = document.createElement('div');
     div.className = 'disc-stat';
-    div.innerHTML = `<div class="disc-stat-value">${s.value}</div><div class="disc-stat-label">${s.label}</div>`;
+    div.innerHTML = `<div class="disc-stat-value">${escapeHtml(s.value)}</div><div class="disc-stat-label">${escapeHtml(s.label)}</div>`;
     ds.appendChild(div);
   });
 
@@ -878,7 +878,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   }));
 
   function escapeHtml(v) {
-    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function renderListSection(id, items, fn) {
@@ -939,7 +939,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       const block = document.createElement('div');
       block.className = 'subgenre-block';
       const heading = document.createElement('h4');
-      heading.innerHTML = `${genre} <span>${info.total_hours}h total</span>`;
+      heading.innerHTML = `${escapeHtml(genre)} <span>${escapeHtml(info.total_hours)}h total</span>`;
       block.appendChild(heading);
 
       const bar = document.createElement('div');
@@ -964,7 +964,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       info.subs.forEach((s, i) => {
         const item = document.createElement('div');
         item.className = 'subgenre-legend-item';
-        item.innerHTML = `<span class="subgenre-legend-swatch" style="background:${info.colors[i] || '#b8b7b2'}"></span>${s.name} <span class="subgenre-legend-pct">${s.pct}%</span>`;
+        item.innerHTML = `<span class="subgenre-legend-swatch" style="background:${info.colors[i] || '#b8b7b2'}"></span>${escapeHtml(s.name)} <span class="subgenre-legend-pct">${escapeHtml(s.pct)}%</span>`;
         legend.appendChild(item);
       });
       block.appendChild(legend);
@@ -1053,7 +1053,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
         const el = document.createElement('div');
         el.className = 'era';
         el.style.flex = `${span}`;
-        el.innerHTML = `<div class="era-name">${era.name}</div><div class="era-years">${era.years}</div>`;
+        el.innerHTML = `<div class="era-name">${escapeHtml(era.name)}</div><div class="era-years">${escapeHtml(era.years)}</div>`;
         eraContainer.appendChild(el);
       });
     }
@@ -1081,7 +1081,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
       const pctSpan = document.createElement('span');
       pctSpan.className = 'legend-pct';
       pctSpan.textContent = overallPcts[g] + '%';
-      item.innerHTML = `<span class="legend-swatch" style="background:${GENRE_COLORS[g] || '#ccc'}"></span>${g} `;
+      item.innerHTML = `<span class="legend-swatch" style="background:${GENRE_COLORS[g] || '#ccc'}"></span>${escapeHtml(g)} `;
       item.appendChild(pctSpan);
       legendEl.appendChild(item);
       pctEls[g] = pctSpan;
@@ -1173,9 +1173,21 @@ const GENRE_COLORS = DATA.genre_colors || {};
     return `Genres cover ${(100 - (D.genre_unclassified_pct || 0)).toFixed(1)}% of listening time (${parts.join(', ')}).${unclassified}`;
   }
 
+  function importNote() {
+    const m = D.import;
+    if (!m || !m.files_used) return '';
+    const n = x => Number(x).toLocaleString();
+    const bits = [`${n(m.plays)} plays of 30 seconds or more`];
+    if (m.short_listens) bits.push(`${n(m.short_listens)} shorter listens counted only as skips`);
+    if (m.non_music) bits.push(`${n(m.non_music)} podcast or other non-music rows left out`);
+    if (m.overlap_dropped) bits.push(`${n(m.overlap_dropped)} rows repeated across files dropped`);
+    if (m.malformed) bits.push(`${n(m.malformed)} rows with unreadable timestamps skipped`);
+    return `Read ${n(m.records)} rows from ${m.files_used} file${m.files_used === 1 ? '' : 's'}: ${bits.join('; ')}.`;
+  }
+
   // ─── Source footer ──────────────────────────────────────
   document.getElementById('source-footer').textContent =
-    `Source: Spotify Extended Streaming History (GDPR data export), ${D.date_range_start || '?'}–${D.date_range_end || '?'}, times in ${D.timezone || 'local time'}. ${genreNote()} Generated by spotify-history-report.`;
+    `Source: Spotify Extended Streaming History (GDPR data export), ${D.date_range_start || '?'}–${D.date_range_end || '?'}, times in ${D.timezone || 'local time'}. ${importNote()} ${genreNote()} Generated by spotify-history-report.`;
 
 })();
 </script>
