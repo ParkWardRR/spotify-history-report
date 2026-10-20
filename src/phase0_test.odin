@@ -30,10 +30,10 @@ mk_play :: proc(ts, track, artist: string, ms: i64 = 200000, skipped := false) -
 	return p
 }
 
-one_genre :: proc(artist, genre: string) -> map[string]string {
-	m: map[string]string
-	m[artist] = genre
-	return m
+resolver_for :: proc(artist, genre: string) -> Genre_Resolver {
+	f := Annotation_File{schema_version = ANNOTATIONS_SCHEMA_VERSION}
+	append(&f.annotations, Annotation{artist = artist, namespace = NS_GENRE, value = genre, source = "llm"})
+	return build_genre_resolver(f, nil)
 }
 
 stats_for :: proc(plays: ..Play) -> Stats {
@@ -331,8 +331,8 @@ test_ties_rank_the_same_regardless_of_encounter_order :: proc(t: ^testing.T) {
 
 @(test)
 test_complete_final_year_is_kept :: proc(t: ^testing.T) {
-	genres := one_genre("X", "Rock")
-	defer delete(genres)
+	genres := resolver_for("X", "Rock")
+	defer genre_resolver_destroy(&genres)
 	list := [?]Play{
 		mk_play("2020-01-01T12:00:00Z", "A", "X"),
 		mk_play("2020-07-01T12:00:00Z", "A", "X"),
@@ -340,7 +340,7 @@ test_complete_final_year_is_kept :: proc(t: ^testing.T) {
 	}
 	s := compute_stats(list[:])
 	testing.expect(t, !s.last_year_partial)
-	compute_genre_stats(&s, list[:], genres)
+	compute_genre_stats(&s, list[:], &genres)
 	testing.expect_value(t, len(s.genre_area), 3) // Q1, Q3, Q4 have plays; the final year is not dropped
 	testing.expect_value(t, s.genre_area[len(s.genre_area) - 1].quarter, "2020-Q4")
 	for q in s.genre_area do testing.expectf(t, !q.partial, "%s should be complete", q.quarter)
@@ -348,15 +348,15 @@ test_complete_final_year_is_kept :: proc(t: ^testing.T) {
 
 @(test)
 test_partial_quarters_are_flagged_not_dropped :: proc(t: ^testing.T) {
-	genres := one_genre("X", "Rock")
-	defer delete(genres)
+	genres := resolver_for("X", "Rock")
+	defer genre_resolver_destroy(&genres)
 	list := [?]Play{
 		mk_play("2020-02-10T12:00:00Z", "A", "X"), // history starts mid-Q1
 		mk_play("2020-06-15T12:00:00Z", "A", "X"),
 		mk_play("2021-02-10T12:00:00Z", "A", "X"), // and ends mid-Q1
 	}
 	s := compute_stats(list[:])
-	compute_genre_stats(&s, list[:], genres)
+	compute_genre_stats(&s, list[:], &genres)
 	testing.expect(t, s.last_year_partial)
 	partial: map[string]bool
 	defer delete(partial)

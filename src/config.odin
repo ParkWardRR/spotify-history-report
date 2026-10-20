@@ -148,7 +148,8 @@ resolve_provider :: proc(cfg: Config) -> (LLM_Provider, string, string) {
 	return .None, "", ""
 }
 
-// Load cached genre map from data directory
+// Reads the legacy .genre_cache.json. Only the one-time import into
+// .shr/annotations.json uses it; nothing writes this file any more.
 load_genre_cache :: proc(data_dir: string) -> (map[string]string, bool) {
 	path := genre_cache_path(data_dir)
 	data, err := os.read_entire_file(path, context.allocator)
@@ -159,27 +160,6 @@ load_genre_cache :: proc(data_dir: string) -> (map[string]string, bool) {
 	delete(data)
 	if json_err != nil do return {}, false
 	return result, true
-}
-
-// Save genre map cache
-save_genre_cache :: proc(data_dir: string, genres: map[string]string) {
-	j := strings.builder_make()
-	defer strings.builder_destroy(&j)
-
-	strings.write_string(&j, "{\n")
-	i := 0
-	total := len(genres)
-	for artist, genre in genres {
-		comma := "," if i < total - 1 else ""
-		esc_a := json_escape(artist)
-		esc_g := json_escape(genre)
-		strings.write_string(&j, fmt.aprintf("  \"%s\": \"%s\"%s\n", esc_a, esc_g, comma))
-		i += 1
-	}
-	strings.write_string(&j, "}\n")
-
-	path := genre_cache_path(data_dir)
-	_ = os.write_entire_file(path, transmute([]u8)strings.to_string(j))
 }
 
 json_escape :: proc(s: string) -> string {

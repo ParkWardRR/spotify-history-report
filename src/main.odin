@@ -13,6 +13,7 @@ main :: proc() {
 	force_plain := false
 	identities_only := false
 	scores_only := false
+	annotations_only := false
 
 	for a in args[1:] {
 		switch a {
@@ -31,6 +32,8 @@ main :: proc() {
 			identities_only = true
 		case "--scores":
 			scores_only = true
+		case "--annotations":
+			annotations_only = true
 		}
 	}
 
@@ -97,6 +100,10 @@ main :: proc() {
 		os.exit(2)
 	}
 
+	if annotations_only {
+		if !run_annotations(opts) do os.exit(1)
+		return
+	}
 	if scores_only {
 		if !run_scores(opts) do os.exit(1)
 		return
@@ -162,15 +169,56 @@ run_identities :: proc(opts: Run_Opts) -> bool {
 		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
 		return false
 	}
-	table, err := resolve_identities(loaded.plays[:], opts.data_dir, &loaded.tally)
+	ov, ov_err := load_overrides(opts.data_dir)
+	if len(ov_err) > 0 {
+		fmt.eprintfln("%s", ov_err)
+		return false
+	}
+	table, err := resolve_identities(loaded.plays[:], ov, &loaded.tally)
 	if len(err) > 0 {
-		fmt.eprintfln("%s", err)
+		fmt.eprintfln("overrides.json: %s", err)
 		return false
 	}
 	if !save_identities(opts.data_dir, table) {
 		fmt.eprintfln("note: could not write %s/%s", SHR_DIR_NAME, IDENTITIES_FILE)
 	}
 	fmt.print(identity_report_text(table))
+	return true
+}
+
+// `--annotations`: genre coverage and the biggest gaps. No LLM; it imports a
+// legacy .genre_cache.json the first time so the numbers match a normal run.
+run_annotations :: proc(opts: Run_Opts) -> bool {
+	files := find_json_files(opts.data_dir)
+	if len(files) == 0 {
+		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
+		return false
+	}
+	clock := make_clock(opts.timezone)
+	loaded, ok := load_plays(files[:], &clock, false)
+	if !ok {
+		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
+		return false
+	}
+	ov, ov_err := load_overrides(opts.data_dir)
+	if len(ov_err) > 0 {
+		fmt.eprintfln("%s", ov_err)
+		return false
+	}
+	if _, err := resolve_identities(loaded.plays[:], ov, &loaded.tally); len(err) > 0 {
+		fmt.eprintfln("overrides.json: %s", err)
+		return false
+	}
+	store, info, err := load_annotations(opts.data_dir)
+	if len(err) > 0 {
+		fmt.eprintfln("%s", err)
+		return false
+	}
+	if info.migrated && !save_annotations(opts.data_dir, store) {
+		fmt.eprintfln("note: could not write %s/%s", SHR_DIR_NAME, ANNOTATIONS_FILE)
+	}
+	resolver := build_genre_resolver(store, ov.annotations[:])
+	fmt.print(annotations_report_text(store, info, &resolver, loaded.plays[:], len(ov.annotations)))
 	return true
 }
 
@@ -189,8 +237,13 @@ run_scores :: proc(opts: Run_Opts) -> bool {
 		return false
 	}
 	// Overrides apply here too, so the scores match the report.
-	if _, err := resolve_identities(loaded.plays[:], opts.data_dir, &loaded.tally); len(err) > 0 {
-		fmt.eprintfln("%s", err)
+	ov, ov_err := load_overrides(opts.data_dir)
+	if len(ov_err) > 0 {
+		fmt.eprintfln("%s", ov_err)
+		return false
+	}
+	if _, err := resolve_identities(loaded.plays[:], ov, &loaded.tally); len(err) > 0 {
+		fmt.eprintfln("overrides.json: %s", err)
 		return false
 	}
 	fmt.print(scores_report_text(compute_scores(loaded.plays[:], opts.decay if opts.decay > 0 else DEFAULT_DECAY), evaluate_rankers(loaded.plays[:])))

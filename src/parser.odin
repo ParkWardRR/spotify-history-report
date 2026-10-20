@@ -94,7 +94,9 @@ Stats :: struct {
 	genre_order:        [dynamic]string,
 	genre_colors:       map[string]string,
 	genre_classified:   int,
-	genre_other_pct:    f64,
+	genre_unclassified_pct: f64, // share of listening time with no genre annotation
+	genre_source_pct:   [Annotation_Source]f64, // share of listening time decided by each source
+	genre_user_targets: int,    // artists and tracks the user classified
 	// Coverage: the span of local days the data covers, for completeness checks.
 	first_ordinal:      i64,
 	last_ordinal:       i64,

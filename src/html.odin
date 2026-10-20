@@ -49,6 +49,14 @@ report_json :: proc(s: Stats) -> string {
 	wf(&j, "\"genre_subtitle\":\"Quarterly share of listening time by genre.\",")
 	wf(&j, "\"heatmap_title\":\"When I listen\",")
 	wf(&j, "\"genre_classified\":%d,", s.genre_classified)
+	wf(&j, "\"genre_unclassified_pct\":%.1f,", s.genre_unclassified_pct)
+	wf(&j, "\"genre_user_targets\":%d,", s.genre_user_targets)
+	w(&j, "\"genre_source_pct\":{")
+	for src in Annotation_Source {
+		if src != min(Annotation_Source) do w(&j, ",")
+		wf(&j, "\"%s\":%.1f", source_name(src), s.genre_source_pct[src])
+	}
+	w(&j, "},")
 
 	// Skip rate
 	wf(&j, "\"skip_rate_first\":%d,", s.skip_rate_first)

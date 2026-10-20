@@ -72,10 +72,10 @@ Genre classification cannot be derived from the data alone. Approach:
 1. Rank artists by total play count, descending
 2. Classify the top N artists into genres manually or with LLM assistance
 3. Use a fixed genre order for consistent colors
-4. Track "Other" percentage — target < 5% for meaningful visualization
+4. Track the Unclassified percentage (listening time with no genre) — target < 5% for a meaningful chart; `Other` is a genre label, not a measure of coverage
 5. Subgenre breakdown: for top genres, further classify key artists into 3-4 subcategories
 
-**Genre map format**: `{ "Artist Name": "Genre Label" }` — flat dict, one genre per artist.
+**Annotation format**: records of `{artist, title?, namespace, value, source, model, confidence, observed}`, so a genre can be about an artist or a single track, can have several sources, and can be corrected by the user. A flat `{ "Artist Name": "Genre Label" }` map is still accepted as a legacy import. Artists with no annotation are *Unclassified*, never `Other`.
 
 ### Layer 6: Album and platform analysis
 

@@ -609,10 +609,9 @@ GENRE_COLORS_DEFAULT :: [?][2]string{
 	{"Other",          "#b8b7b2"},
 }
 
-compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]string) {
-	if len(genre_map) == 0 do return
+compute_genre_stats :: proc(stats: ^Stats, plays: []Play, r: ^Genre_Resolver) {
+	if len(r.by_artist) == 0 && len(r.by_track) == 0 do return
 
-	// Genre order and colors
 	for g in GENRE_ORDER_DEFAULT {
 		append(&stats.genre_order, g)
 	}
@@ -620,21 +619,30 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 		stats.genre_colors[gc[0]] = gc[1]
 	}
 
-	// Count classified
-	classified := 0
-	total_ms: i64 = 0
-	other_ms: i64 = 0
-
-	for &p in plays {
+	// Resolve each play once; remember how much listening has no annotation.
+	total_ms, unknown_ms: i64
+	source_ms: [Annotation_Source]i64
+	picks := make([]string, len(plays), context.temp_allocator)
+	for &p, i in plays {
 		total_ms += p.ms
-		if p.artist in genre_map {
-			classified += 1
+		if pick, ok := resolve_genre(r, p.track, p.artist); ok {
+			picks[i] = pick.genre
+			source_ms[pick.source] += p.ms
+			stats.genre_classified += 1
 		} else {
-			other_ms += p.ms
+			picks[i] = UNCLASSIFIED
+			unknown_ms += p.ms
 		}
 	}
-	stats.genre_classified = classified
-	stats.genre_other_pct = f64(other_ms) / f64(max(total_ms, 1)) * 100
+	stats.genre_unclassified_pct = f64(unknown_ms) / f64(max(total_ms, 1)) * 100
+	for s in Annotation_Source do stats.genre_source_pct[s] = f64(source_ms[s]) / f64(max(total_ms, 1)) * 100
+	stats.genre_user_targets = r.user_artists + r.user_tracks
+
+	// "Unclassified" is a series of its own, and only when there is something in it.
+	if unknown_ms > 0 {
+		append(&stats.genre_order, UNCLASSIFIED)
+		stats.genre_colors[UNCLASSIFIED] = UNCLASSIFIED_COLOR
+	}
 
 	// Genre share by quarter. A quarter is partial when the data does not span
 	// all of it (typically the current quarter, or the one the history starts in);
@@ -645,17 +653,12 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 		delete(quarter_genre_ms)
 	}
 
-	for &p in plays {
+	for &p, i in plays {
 		q := quarter_label(p.year, p.month)
-		genre := "Other"
-		if p.artist in genre_map {
-			genre = genre_map[p.artist]
-		}
-
 		if q not_in quarter_genre_ms {
 			quarter_genre_ms[q] = {}
 		}
-		(&quarter_genre_ms[q])[genre] += p.ms
+		(&quarter_genre_ms[q])[picks[i]] += p.ms
 	}
 
 	// Sort quarters
@@ -675,11 +678,10 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 		gq.quarter = q
 		gq.partial = quarter_partial(q, stats.first_ordinal, stats.last_ordinal)
 		gq.values = {}
-		for g in GENRE_ORDER_DEFAULT {
+		for g in stats.genre_order {
 			ms: i64 = 0
 			if g in gm { ms = gm[g] }
-			pct := f64(ms) / f64(max(total_q, 1)) * 100
-			gq.values[g] = pct
+			gq.values[g] = f64(ms) / f64(max(total_q, 1)) * 100
 		}
 		append(&stats.genre_area, gq)
 	}

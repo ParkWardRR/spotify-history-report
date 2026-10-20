@@ -84,7 +84,7 @@ That's it. Open `spotify_report.html` in your browser.
 
 ### 4. Configure an LLM API key
 
-Genre classification requires an LLM. Provide an API key via environment variable, CLI flag, or config file:
+Genre classification uses an LLM for artists that have no genre yet. Provide an API key via environment variable, CLI flag, or config file:
 
 ```bash
 # Environment variable (easiest)
@@ -97,7 +97,7 @@ ANTHROPIC_API_KEY=sk-ant-... ./spotify-history-report ~/Downloads/my_spotify_dat
 ./spotify-history-report --setup
 ```
 
-Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are cached in `.genre_cache.json` alongside your data so subsequent runs are instant.
+Supported providers: **Anthropic** (Claude), **OpenAI** (GPT-4o-mini), **OpenRouter** (any model). The tool auto-detects which key is available if you set multiple. Classifications are stored in `.shr/annotations.json` alongside your data so subsequent runs are instant.
 
 ---
 
@@ -170,6 +170,7 @@ src/
 ├── parser.odin    Spotify JSON deserialization, record → play conversion
 ├── calendar.odin  timestamps → local time (named timezone, true day ordinals)
 ├── identity.odin  track identity: URI resolution, duplicate candidates, overrides
+├── annotations.odin  genre annotations: store, migration, precedence, coverage
 ├── scores.odin    ACT-R activation, favourites/obsessions/rediscoveries, held-out evaluation
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache
@@ -260,9 +261,37 @@ A reference is either a `uri` or both `artist` and `title`. Merges rewrite the p
 
 ## Genre classification
 
-When an LLM API key is available, the tool sends your unique artist names to the LLM in batches of 150 and asks it to classify each into one of 14 genres (Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other).
+Genres are **annotations**, not a lookup table. Each one records what was claimed, about what, by whom and when, in `.shr/annotations.json` next to your data:
 
-Results are cached in `.genre_cache.json` next to your data files. The cache is additive — new artists from future exports get classified and merged in.
+| Field | Meaning |
+|:------|:--------|
+| `artist`, `title` | What it is about. An empty `title` means the whole artist; a title means just that track |
+| `namespace`, `value` | `genre` today (one of the 14 labels below); `mood`, `era`, `language`, … are accepted and kept for later |
+| `source`, `model` | `user`, `musicbrainz`, `sidecar` or `llm`, and the model id for model-made ones |
+| `confidence`, `observed` | A score where the source has a calibrated one (else `null`), and the date |
+
+Three rules keep it honest:
+
+- **Unknown is not "Other".** `Other` is a real label an LLM can answer with. An artist nobody has classified is *Unclassified*: its own light-grey series in the chart, with the covered share of your listening time stated in the report footer. A label the LLM invents outside the 14 (say "Hip hop") is rejected and the artist stays unclassified and is asked about again, instead of being filed under `Other` or silently dropped.
+- **You always win.** Decisions in `.shr/overrides.json` beat every other source, at artist or track level, and a later LLM run can never replace them. Among the other sources a more specific track-level annotation beats an artist-level one; for the same target the most recent observation of the same source wins.
+- **An unreadable store is never overwritten.** If `.shr/annotations.json` is damaged the run stops and says so.
+
+When an LLM key is available the tool sends your artist names (never your listening history) in batches of 150 and asks for one of 14 genres: Hip-hop & Rap, Indie pop, Funk & Soul, Electronic, Rock, R&B, Jazz, Latin, Classical, Pop, Country, Metal, World, Other. It only asks about artists that have no genre yet, so reruns and new exports cost nothing for what is already known. **If every artist already has a genre, no key is needed at all.**
+
+```bash
+./spotify-history-report ~/Downloads/my_spotify_data/ --annotations   # coverage + biggest gaps, no LLM
+```
+
+To classify something yourself, add it to `.shr/overrides.json`:
+
+```json
+{ "annotations": [
+    { "artist": "Daft Punk", "value": "Electronic" },
+    { "artist": "Daft Punk", "title": "Get Lucky", "value": "Funk & Soul" }
+] }
+```
+
+An older `.genre_cache.json` is imported once on the first run (marked as LLM output of unknown model) and ignored afterwards.
 
 The genre data powers a stacked area chart in the report showing how your listening taste evolved quarter by quarter.
 

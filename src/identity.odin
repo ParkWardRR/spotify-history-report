@@ -383,10 +383,20 @@ Separate_Override :: struct {
 	b: Override_Ref,
 }
 
+// A genre (or other namespace) decided by the user. An empty title annotates
+// the whole artist; an empty namespace means genre.
+User_Annotation :: struct {
+	artist:    string,
+	title:     string,
+	namespace: string,
+	value:     string,
+}
+
 Overrides :: struct {
 	version:       int,
 	merges:        [dynamic]Merge_Override,
 	keep_separate: [dynamic]Separate_Override,
+	annotations:   [dynamic]User_Annotation,
 }
 
 // Reads `.shr/overrides.json`. A missing file is fine (nothing overridden); a
@@ -404,7 +414,7 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 	val, perr := json.parse(data, allocator = context.temp_allocator)
 	if perr != nil do return {}, fmt.aprintf("%s is not valid JSON (%v)", label, perr)
 
-	if e := check_keys(val, {"version", "merges", "keep_separate"}, label); len(e) > 0 do return {}, e
+	if e := check_keys(val, {"version", "merges", "keep_separate", "annotations"}, label); len(e) > 0 do return {}, e
 	root := val.(json.Object)
 
 	check_list :: proc(root: json.Object, field: string, pair: [2]string, label: string) -> string {
@@ -427,7 +437,22 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 	if e := check_list(root, "merges", {"from", "into"}, label); len(e) > 0 do return {}, e
 	if e := check_list(root, "keep_separate", {"a", "b"}, label); len(e) > 0 do return {}, e
 
+	if raw, present := root["annotations"]; present {
+		arr, is_arr := raw.(json.Array)
+		if !is_arr do return {}, fmt.aprintf("%s: \"annotations\" must be a list", label)
+		for item, i in arr {
+			where_ := fmt.aprintf("%s: annotations[%d]", label, i)
+			if e := check_keys(item, {"artist", "title", "namespace", "value"}, where_); len(e) > 0 do return {}, e
+		}
+	}
+
 	if uerr := json.unmarshal(data, &ov); uerr != nil do return {}, fmt.aprintf("%s: %v", label, uerr)
+	for &u, i in ov.annotations {
+		where_ := fmt.aprintf("%s: annotations[%d]", label, i)
+		if len(u.artist) == 0 do return {}, fmt.aprintf("%s: missing \"artist\"", where_)
+		if len(u.namespace) == 0 do u.namespace = NS_GENRE
+		if p := validate_annotation(u.namespace, u.value); len(p) > 0 do return {}, fmt.aprintf("%s: %s", where_, p)
+	}
 	if ov.version != 0 && ov.version != 1 {
 		return {}, fmt.aprintf("%s: unsupported version %d (this build reads version 1)", label, ov.version)
 	}

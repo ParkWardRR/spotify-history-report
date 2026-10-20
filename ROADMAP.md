@@ -17,7 +17,7 @@ Two rules shape everything below:
    models live in an optional sidecar that communicates through cached files on
    disk. You can delete the sidecar and the tool still works.
 
-Status: **Phases 0, 1a and 3 are implemented** (see its section for what shipped and the
+Status: **Phases 0, 1a, 2 and 3 are implemented** (see its section for what shipped and the
 decisions made along the way); Phases 1–7 are planned. Phase numbers are
 dependency order, not a schedule.
 
@@ -257,6 +257,31 @@ Rules:
 **Done when:** the genre chart renders from annotations, artist-level and
 track-level annotations coexist, coverage and `unknown` are reported, and user
 overrides round-trip through a re-run.
+
+### Phase 2 outcome
+
+Implemented in `annotations.odin`: the annotation store (`.shr/annotations.json`),
+the one-time `.genre_cache.json` import, strict validation, a precedence
+resolver, `unknown` as its own *Unclassified* series, user annotations in
+`overrides.json`, and `--annotations` (coverage plus the biggest gaps).
+
+- **Precedence:** user (any level) → track-level before artist-level → source
+  (`musicbrainz`, `sidecar`, `llm`) → most recent observation → later record.
+  The source order among non-user sources is a fixed policy, not a claim about
+  accuracy; it only matters once more than one non-user source exists.
+- **Bugs this fixed.** LLM labels were never validated, so an invented label
+  vanished from the quarterly shares (which then stopped summing to 100%). A
+  missing annotation was drawn as `Other`. Both are now covered by tests that
+  were mutation-checked.
+- **A key is only needed when there is work for it.** Previously the run failed
+  before loading anything if no key was set, even when every artist was already
+  classified. It now fails (with the count and the fix) only when some artist
+  actually needs the LLM; the "LLM is mandatory" intent is unchanged.
+- **Not done:** annotating by Spotify URI (merge overrides rename plays, so an
+  annotation written against the old spelling stops matching; use the merged
+  name), per-annotation confidence from the LLM (the prompt returns none, so it
+  is recorded as `null` rather than invented), and using non-genre namespaces
+  anywhere in the UI. They are stored and validated, ready for Phases 4–5.
 
 ---
 

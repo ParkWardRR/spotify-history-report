@@ -482,7 +482,7 @@ Genre_Share :: struct {
 }
 
 genre_color :: proc(name: string, order_idx: int) -> Nord {
-	if name == "Other" do return COL_MUTED
+	if name == "Other" || name == UNCLASSIFIED do return COL_MUTED
 	return SERIES_COLORS[order_idx % len(SERIES_COLORS)]
 }
 
@@ -564,6 +564,13 @@ build_genres :: proc(s: ^Stats, cw: int) -> string {
 			fgs(COL_TEXT, pad_left(fmt.tprintf("%.1f%%", g.share), 6)),
 		}, context.temp_allocator))
 	}
-	append(&out, "", muted(fmt.tprintf("%s plays mapped · %.1f%% unclassified", fmt_int(s.genre_classified), s.genre_other_pct)))
+	note := fmt.tprintf("%.1f%% of listening annotated", 100 - s.genre_unclassified_pct)
+	if s.genre_unclassified_pct > 0 {
+		note = fmt.tprintf("%s · %.1f%% unclassified (not the same as Other)", note, s.genre_unclassified_pct)
+	}
+	if s.genre_user_targets > 0 {
+		note = fmt.tprintf("%s · %d set by you", note, s.genre_user_targets)
+	}
+	append(&out, "", muted(note))
 	return join_v(out[:])
 }

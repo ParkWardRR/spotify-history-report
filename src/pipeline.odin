@@ -106,10 +106,8 @@ load_plays :: proc(files: []string, clock: ^Clock, progress: bool) -> (r: Load_R
 
 // Builds the identity table, applying `.shr/overrides.json` when present.
 // Returns a message in `err` if the overrides file can't be used.
-resolve_identities :: proc(plays: []Play, data_dir: string, tally: ^Skip_Tally = nil) -> (table: Identity_Table, err: string) {
-	ov, ov_err := load_overrides(data_dir)
-	if len(ov_err) > 0 do return {}, ov_err
-
+resolve_identities :: proc(plays: []Play, ov: Overrides, tally: ^Skip_Tally = nil) -> (table: Identity_Table, err: string) {
+	ov := ov
 	table = build_identity_table(plays, &ov)
 	if len(ov.merges) == 0 do return
 
@@ -145,13 +143,6 @@ run_pipeline :: proc(o: Run_Opts) {
 	}
 	stage_msg(.Scan, .Done, fmt.aprintf("%d file%s", len(files), "" if len(files) == 1 else "s"))
 
-	// Fail fast before the slow part: genre classification needs an LLM.
-	if o.provider == .None {
-		fail(.Genres, "No LLM API key found",
-			"Run --setup to configure one, pass --anthropic-key / --openai-key / --openrouter-key, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.")
-		return
-	}
-
 	// ── Load ──
 	clock := make_clock(o.timezone)
 	stage_msg(.Load, .Active, "", 0, len(files))
@@ -172,9 +163,14 @@ run_pipeline :: proc(o: Run_Opts) {
 
 	// ── Identity ──
 	stage_msg(.Identity, .Active, "")
-	table, id_err := resolve_identities(all_plays[:], o.data_dir, tally)
+	ov, ov_err := load_overrides(o.data_dir)
+	if len(ov_err) > 0 {
+		fail(.Identity, ov_err, "Fix or remove .shr/overrides.json in your data directory, then run again.")
+		return
+	}
+	table, id_err := resolve_identities(all_plays[:], ov, tally)
 	if len(id_err) > 0 {
-		fail(.Identity, id_err, "Fix or remove .shr/overrides.json in your data directory, then run again.")
+		fail(.Identity, fmt.aprintf("overrides.json: %s", id_err), "Fix or remove .shr/overrides.json in your data directory, then run again.")
 		return
 	}
 	saved := save_identities(o.data_dir, table)
@@ -201,39 +197,58 @@ run_pipeline :: proc(o: Run_Opts) {
 		fmt_int(stats.unique_artists), fmt_int(stats.unique_tracks)))
 
 	// ── Genres ──
-	genre_map: map[string]string
-	cached, has_cache := load_genre_cache(o.data_dir)
-	if has_cache && len(cached) > 0 do genre_map = cached
+	store, store_info, store_err := load_annotations(o.data_dir)
+	if len(store_err) > 0 {
+		fail(.Genres, store_err, "Nothing was changed. Repair .shr/annotations.json, or move it aside to rebuild from .genre_cache.json.")
+		return
+	}
+	resolver := build_genre_resolver(store, ov.annotations[:])
 
+	// Artists nobody has classified yet, most-listened first.
 	artist_list: [dynamic]string
-	artist_set: map[string]bool
+	seen: map[string]bool
 	for &a in stats.top_artists {
-		append(&artist_list, a.name)
-		artist_set[a.name] = true
+		seen[a.name] = true
+		if !has_artist_genre(&resolver, a.name) do append(&artist_list, a.name)
 	}
 	for &p in all_plays {
-		if p.artist not_in artist_set {
-			artist_set[p.artist] = true
-			append(&artist_list, p.artist)
-		}
-	}
-	unclassified := 0
-	for &a in artist_list {
-		if a not_in genre_map do unclassified += 1
+		if p.artist in seen do continue
+		seen[p.artist] = true
+		if !has_artist_genre(&resolver, p.artist) do append(&artist_list, p.artist)
 	}
 
-	if unclassified > 0 {
+	existing := len(resolver.by_artist)
+	added := 0
+	dirty := store_info.migrated // a legacy cache was imported and should be saved
+	if len(artist_list) > 0 {
+		if o.provider == .None {
+			fail(.Genres, fmt.aprintf("%s artists have no genre and no LLM API key is set", fmt_int(len(artist_list))),
+				"Run --setup to configure a key, pass --anthropic-key / --openai-key / --openrouter-key, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY. Or classify them yourself in .shr/overrides.json (run --annotations to see which).")
+			return
+		}
 		stage_msg(.Genres, .Active,
 			fmt.aprintf("%s · %s", provider_name(o.provider), o.model),
-			0, (unclassified + BATCH_SIZE - 1) / BATCH_SIZE)
-		genre_map = classify_artists_llm(artist_list[:], o.provider, o.api_key, o.model, genre_map)
-		save_genre_cache(o.data_dir, genre_map)
-		stage_msg(.Genres, .Done, fmt.aprintf("%s artists classified via %s",
-			fmt_int(unclassified), provider_name(o.provider)))
-	} else {
-		stage_msg(.Genres, .Done, fmt.aprintf("%s artists (cached)", fmt_int(len(genre_map))))
+			0, (len(artist_list) + BATCH_SIZE - 1) / BATCH_SIZE)
+		answers := classify_artists_llm(artist_list[:], o.provider, o.api_key, o.model, nil)
+		added, _ = add_llm_annotations(&store, answers, artist_list[:], o.model, today_string())
+		dirty = true
+		genre_resolver_destroy(&resolver)
+		resolver = build_genre_resolver(store, ov.annotations[:])
 	}
-	compute_genre_stats(stats, all_plays[:], genre_map)
+	saved_store := true
+	if dirty do saved_store = save_annotations(o.data_dir, store)
+
+	detail := fmt.aprintf("%s artists annotated", fmt_int(len(resolver.by_artist)))
+	if existing > 0 && added == 0 do detail = fmt.aprintf("%s artists annotated (stored)", fmt_int(existing))
+	if added > 0 do detail = fmt.aprintf("%s from storage · %s new via %s", fmt_int(existing), fmt_int(added), provider_name(o.provider))
+	if len(artist_list) > added do detail = fmt.aprintf("%s · %d still unclassified", detail, len(artist_list) - added)
+	if store_info.migrated && len(store.migrated_from) > 0 do detail = fmt.aprintf("%s · imported %s", detail, store.migrated_from)
+	if resolver.user_artists + resolver.user_tracks > 0 {
+		detail = fmt.aprintf("%s · %d of yours", detail, resolver.user_artists + resolver.user_tracks)
+	}
+	if !saved_store do detail = fmt.aprintf("%s · not saved", detail)
+	stage_msg(.Genres, .Done, detail)
+	compute_genre_stats(stats, all_plays[:], &resolver)
 
 	// ── Report ──
 	stage_msg(.Report, .Active, o.output_path)
