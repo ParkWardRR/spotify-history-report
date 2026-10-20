@@ -56,6 +56,7 @@ Run_Opts :: struct {
 	provider:    LLM_Provider,
 	api_key:     string,
 	model:       string,
+	timezone:    string, // IANA name; empty means the default
 }
 
 emit: proc(msg: Msg) = proc(msg: Msg) {}
@@ -96,8 +97,12 @@ run_pipeline :: proc(o: Run_Opts) {
 	}
 
 	// ── Load ──
+	clock := make_clock(o.timezone)
 	all_plays: [dynamic]Play
+	tally: Skip_Tally
+	defer skip_tally_destroy(&tally)
 	total_records := 0
+	bad_timestamps := 0
 	stage_msg(.Load, .Active, "", 0, len(files))
 	for path, fi in files {
 		records, ok := load_records(path)
@@ -108,38 +113,31 @@ run_pipeline :: proc(o: Run_Opts) {
 		total_records += len(records)
 
 		for &rec in records {
-			track := rec.master_metadata_track_name.? or_else ""
-			artist := rec.master_metadata_album_artist_name.? or_else ""
-			if rec.ms_played < 30000 || len(track) == 0 || len(artist) == 0 do continue
-
-			year, month, day, hour, minute, weekday := parse_ts_fields(rec.ts)
-			append(&all_plays, Play{
-				year     = year,
-				month    = month,
-				day      = day,
-				hour     = hour,
-				minute   = minute,
-				weekday  = weekday,
-				ms       = rec.ms_played,
-				track    = track,
-				artist   = artist,
-				album    = rec.master_metadata_album_album_name.? or_else "",
-				platform = rec.platform.? or_else "",
-				skipped  = rec.skipped.? or_else false,
-				ts_raw   = rec.ts,
-			})
+			play, status := record_to_play(rec, &clock)
+			switch status {
+			case .Not_A_Track:   continue
+			case .Bad_Timestamp: bad_timestamps += 1; continue
+			case .Ok:
+			}
+			tally_record(&tally, play.year, play_key(play), is_skip(play))
+			if qualifies(play) do append(&all_plays, play)
 		}
 		delete(records)
 		stage_msg(.Load, .Active, filepath.base(path), fi + 1, len(files))
 	}
-	slice.sort_by(all_plays[:], proc(a, b: Play) -> bool { return a.ts_raw < b.ts_raw })
-	stage_msg(.Load, .Done, fmt.aprintf("%s records · %s qualifying plays",
-		fmt_int(total_records), fmt_int(len(all_plays))), len(files), len(files))
+	sort_plays(all_plays[:])
+	load_detail := fmt.aprintf("%s records · %s qualifying plays · %s",
+		fmt_int(total_records), fmt_int(len(all_plays)), clock_label(clock))
+	if bad_timestamps > 0 {
+		load_detail = fmt.aprintf("%s · %s unreadable timestamps skipped", load_detail, fmt_int(bad_timestamps))
+	}
+	stage_msg(.Load, .Done, load_detail, len(files), len(files))
 
 	// ── Compute ──
 	stage_msg(.Compute, .Active, "")
 	stats := new(Stats)
-	stats^ = compute_stats(all_plays[:])
+	stats^ = compute_stats(all_plays[:], &tally)
+	stats.timezone = clock_label(clock)
 	stage_msg(.Compute, .Done, fmt.aprintf("%s artists · %s tracks",
 		fmt_int(stats.unique_artists), fmt_int(stats.unique_tracks)))
 

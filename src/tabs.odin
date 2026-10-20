@@ -480,7 +480,8 @@ build_genres :: proc(s: ^Stats, cw: int) -> string {
 	}
 
 	first_q := s.genre_area[0].quarter
-	last_q := s.genre_area[len(s.genre_area) - 1].quarter
+	last := s.genre_area[len(s.genre_area) - 1]
+	last_q := fmt.tprintf("%s (partial)", last.quarter) if last.partial else last.quarter
 	append(&out, section("Genre mix", cw, fmt.tprintf("%s → %s", first_q, last_q)))
 	append(&out, stacked_bar(parts[:], colors[:], cw))
 	append(&out, wrap_items(legend_items(names[:], pcts[:], colors[:]), cw), "")

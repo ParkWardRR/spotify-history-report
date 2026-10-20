@@ -7,9 +7,9 @@ import "core:strings"
 TEMPLATE :: string(#load("../template/report.html"))
 DATA_MARKER :: "/*DATA_PLACEHOLDER*/{}"
 
-generate_report :: proc(s: Stats, output_path: string) -> bool {
+// The DATA blob embedded in the report, as JSON text.
+report_json :: proc(s: Stats) -> string {
 	j := strings.builder_make()
-	defer strings.builder_destroy(&j)
 
 	w :: strings.write_string
 	wf :: proc(b: ^strings.Builder, f: string, args: ..any) {
@@ -73,8 +73,12 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 			esc(s.worst_earworm.track), esc(s.worst_earworm.artist), s.worst_earworm.plays, s.worst_earworm.period)
 	}
 
-	last_yr := s.hours_by_year[len(s.hours_by_year)-1].year if len(s.hours_by_year) > 0 else 2026
-	wf(&j, "\"hours_subtitle\":\"%d in progress.\",", last_yr)
+	if s.last_year_partial {
+		wf(&j, "\"hours_subtitle\":\"%d is a partial year.\",", s.last_year)
+	} else {
+		w(&j, "\"hours_subtitle\":\"\",")
+	}
+	wf(&j, "\"timezone\":\"%s\",", esc(s.timezone))
 
 	// Most played song
 	wf(&j, "\"most_played_song\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}},",
@@ -177,7 +181,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "\"genre_area\":[")
 	for &gq, qi in s.genre_area {
 		if qi > 0 do w(&j, ",")
-		wf(&j, "{{\"quarter\":\"%s\"", gq.quarter)
+		wf(&j, "{{\"quarter\":\"%s\",\"partial\":%v", gq.quarter, gq.partial)
 		for &g in s.genre_order {
 			v: f64 = 0
 			if g in gq.values { v = gq.values[g] }
@@ -204,6 +208,12 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	w(&j, "]")
 
 	w(&j, "}")
+	return strings.to_string(j)
+}
+
+generate_report :: proc(s: Stats, output_path: string) -> bool {
+	data := report_json(s)
+	defer delete(data)
 
 	// Inject into template
 	tmpl := TEMPLATE
@@ -213,7 +223,7 @@ generate_report :: proc(s: Stats, output_path: string) -> bool {
 	result := strings.builder_make()
 	defer strings.builder_destroy(&result)
 	strings.write_string(&result, tmpl[:marker_pos])
-	strings.write_string(&result, strings.to_string(j))
+	strings.write_string(&result, data)
 	strings.write_string(&result, tmpl[marker_pos + len(DATA_MARKER):])
 
 	return os.write_entire_file(output_path, transmute([]u8)strings.to_string(result)) == nil

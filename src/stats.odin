@@ -9,7 +9,47 @@ Track_Key :: struct {
 	artist: string,
 }
 
-compute_stats :: proc(plays: []Play) -> Stats {
+// The one place a play is mapped to a track key. Today that is (title, artist);
+// the identity layer (ROADMAP Phase 1) will switch this to canonical ids.
+track_key :: proc(track, artist, uri: string) -> Track_Key {
+	return Track_Key{track, artist}
+}
+
+play_key :: proc(p: Play) -> Track_Key {
+	return track_key(p.track, p.artist, p.uri)
+}
+
+// Skips are defined over every record with a track and artist, including the
+// sub-30-second ones the pipeline drops from `plays`: a skip is `skipped: true`
+// or `ms_played < 30000`. Filled while loading, before that filter runs.
+Skip_Tally :: struct {
+	year_total:  map[int]int,
+	year_skips:  map[int]int,
+	track_skips: map[Track_Key]int,
+}
+
+tally_record :: proc(t: ^Skip_Tally, year: int, key: Track_Key, skip: bool) {
+	t.year_total[year] += 1
+	if skip {
+		t.year_skips[year] += 1
+		t.track_skips[key] += 1
+	}
+}
+
+skip_tally_destroy :: proc(t: ^Skip_Tally) {
+	delete(t.year_total); delete(t.year_skips); delete(t.track_skips)
+}
+
+// True if `a` ranks before `b`: higher count first, then artist and track name
+// ascending, so equal counts order the same way on every run (map iteration
+// order is unspecified).
+ranks_before :: proc(a_n: int, a_k: Track_Key, b_n: int, b_k: Track_Key) -> bool {
+	if a_n != b_n do return a_n > b_n
+	if a_k.artist != b_k.artist do return a_k.artist < b_k.artist
+	return a_k.track < b_k.track
+}
+
+compute_stats :: proc(plays: []Play, tally: ^Skip_Tally = nil) -> Stats {
 	stats: Stats
 	stats.total_plays = len(plays)
 
@@ -24,15 +64,25 @@ compute_stats :: proc(plays: []Play) -> Stats {
 
 	for &p in plays {
 		artist_set[p.artist] = true
-		track_set[Track_Key{p.track, p.artist}] = true
+		track_set[play_key(p)] = true
 	}
 	stats.unique_artists = len(artist_set)
 	stats.unique_tracks = len(track_set)
 
-	// Date range
+	// Date range and coverage. Plays arrive sorted, but coverage is derived from
+	// min/max so completeness never depends on that.
 	if len(plays) > 0 {
-		stats.date_range_start = format_month_year(plays[0].year, plays[0].month)
-		stats.date_range_end = format_month_year(plays[len(plays) - 1].year, plays[len(plays) - 1].month)
+		first, last := 0, 0
+		for i in 1..<len(plays) {
+			if plays[i].unix < plays[first].unix do first = i
+			if plays[i].unix > plays[last].unix do last = i
+		}
+		stats.date_range_start = format_month_year(plays[first].year, plays[first].month)
+		stats.date_range_end = format_month_year(plays[last].year, plays[last].month)
+		stats.first_ordinal = plays[first].ordinal
+		stats.last_ordinal = plays[last].ordinal
+		stats.last_year = plays[last].year
+		stats.last_year_partial = plays[last].ordinal < date_ordinal(plays[last].year, 12, 31)
 	}
 
 	// Artist hours
@@ -67,34 +117,37 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	opener_count: map[Track_Key]int
 	defer delete(opener_count)
 	if len(plays) > 0 {
-		opener_count[Track_Key{plays[0].track, plays[0].artist}] += 1
+		opener_count[play_key(plays[0])] += 1
 		for i in 1..<len(plays) {
-			gap := estimate_gap_seconds(plays[i-1], plays[i])
-			if gap > 1800 {
-				opener_count[Track_Key{plays[i].track, plays[i].artist}] += 1
+			if plays[i].unix - plays[i-1].unix > 1800 {
+				opener_count[play_key(plays[i])] += 1
 			}
 		}
 	}
 	stats.session_openers = top_n_openers(opener_count, 10)
 
 	// Never-skipped songs (15+ plays, 0 skips)
+	// A skip also covers the sub-30s plays, which only the tally still knows about.
 	track_total: map[Track_Key]int
 	track_skips: map[Track_Key]int
 	defer { delete(track_total); delete(track_skips) }
 	for &p in plays {
-		k := Track_Key{p.track, p.artist}
+		k := play_key(p)
 		track_total[k] += 1
 		if p.skipped { track_skips[k] += 1 }
 	}
 	ns: [dynamic]Track_Stat
 	defer delete(ns)
 	for k, count in track_total {
-		skip_count := track_skips[k] if k in track_skips else 0
+		skip_count := track_skips[k]
+		if tally != nil do skip_count += tally.track_skips[k]
 		if count >= 15 && skip_count == 0 {
 			append(&ns, Track_Stat{k.track, k.artist, count})
 		}
 	}
-	slice.sort_by(ns[:], proc(a, b: Track_Stat) -> bool { return a.plays > b.plays })
+	slice.sort_by(ns[:], proc(a, b: Track_Stat) -> bool {
+		return ranks_before(a.plays, Track_Key{a.track, a.artist}, b.plays, Track_Key{b.track, b.artist})
+	})
 	for i in 0..<min(10, len(ns)) {
 		append(&stats.never_skipped, ns[i])
 	}
@@ -102,11 +155,13 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	// Most played song
 	track_play_count: map[Track_Key]int
 	defer delete(track_play_count)
-	for &p in plays { track_play_count[Track_Key{p.track, p.artist}] += 1 }
+	for &p in plays { track_play_count[play_key(p)] += 1 }
 	best_track: Track_Key
 	best_count := 0
 	for k, c in track_play_count {
-		if c > best_count { best_count = c; best_track = k }
+		if best_count == 0 || ranks_before(c, k, best_count, best_track) {
+			best_count = c; best_track = k
+		}
 	}
 	stats.most_played_song = Track_Stat{best_track.track, best_track.artist, best_count}
 
@@ -122,7 +177,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	best_day: string
 	best_day_plays := 0
 	for d, c in day_plays {
-		if c > best_day_plays { best_day_plays = c; best_day = d }
+		if c > best_day_plays || (c == best_day_plays && d < best_day) { best_day_plays = c; best_day = d }
 	}
 	bd_ms: i64 = 0
 	if best_day in day_ms_total { bd_ms = day_ms_total[best_day] }
@@ -181,7 +236,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 			append(&stats.loyalists, Artist_Stat{a, f64(ms_val) / 3600000})
 		}
 	}
-	slice.sort_by(stats.loyalists[:], proc(a, b: Artist_Stat) -> bool { return a.hours > b.hours })
+	slice.sort_by(stats.loyalists[:], artist_before)
 
 	// Heatmap: day of week x hour
 	hm_ms: map[[2]int]i64
@@ -229,6 +284,9 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	for yr in yr_keys {
 		if yr not_in year_artist_ms do continue
 		yam := year_artist_ms[yr]
+		// The three shares partition the year's listening: an artist that is both
+		// new this year and an all-time top-10 counts as top-10 only.
+		// `new_count` still counts every artist first heard this year.
 		total_yr: i64 = 0
 		new_ms: i64 = 0
 		top10_ms: i64 = 0
@@ -237,15 +295,20 @@ compute_stats :: proc(plays: []Play) -> Stats {
 		for a, ms in yam {
 			total_yr += ms
 			total_count += 1
-			if a in artist_first_year && artist_first_year[a] == yr {
-				new_ms += ms
-				new_count += 1
-			}
+			is_new := a in artist_first_year && artist_first_year[a] == yr
+			if is_new do new_count += 1
+
+			is_top10 := false
 			for &t in top10_alltime {
 				if a == t {
-					top10_ms += ms
+					is_top10 = true
 					break
 				}
+			}
+			if is_top10 {
+				top10_ms += ms
+			} else if is_new {
+				new_ms += ms
 			}
 		}
 		new_pct := 0
@@ -254,8 +317,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 			new_pct = int(f64(new_ms) / f64(total_yr) * 100)
 			top10_pct = int(f64(top10_ms) / f64(total_yr) * 100)
 		}
-		rest_pct := 100 - new_pct - top10_pct
-		if rest_pct < 0 do rest_pct = 0
+		rest_pct := 100 - new_pct - top10_pct // ≥ 0: the buckets are disjoint
 		append(&stats.explore_obsess, JSON_Explore{yr, new_pct, top10_pct, rest_pct, new_count, total_count})
 	}
 
@@ -263,67 +325,58 @@ compute_stats :: proc(plays: []Play) -> Stats {
 	day_set: map[i64]bool
 	defer delete(day_set)
 	for &p in plays {
-		day_num := i64(p.year) * 366 + i64(p.month) * 31 + i64(p.day)
-		day_set[day_num] = true
+		day_set[p.ordinal] = true
 	}
 	day_list: [dynamic]i64
 	defer delete(day_list)
 	for d in day_set { append(&day_list, d) }
 	slice.sort(day_list[:])
-	max_streak := 1
-	cur_streak := 1
-	for i in 1..<len(day_list) {
-		if day_list[i] - day_list[i-1] == 1 {
+	max_streak := 0
+	cur_streak := 0
+	for d, i in day_list {
+		if i > 0 && d - day_list[i-1] == 1 {
 			cur_streak += 1
 		} else {
-			if cur_streak > max_streak do max_streak = cur_streak
 			cur_streak = 1
 		}
+		max_streak = max(max_streak, cur_streak)
 	}
-	if cur_streak > max_streak do max_streak = cur_streak
 	stats.longest_streak = max_streak
 
 	// Earworms: 7-day sliding window per track
 	{
-		track_plays_list: map[Track_Key][dynamic]int
-		defer {
-			for _, &v in track_plays_list { delete(v) }
-			delete(track_plays_list)
+		Day_Play :: struct {
+			ordinal: i64,
+			year:    int,
+			month:   int,
 		}
-		track_plays_month: map[Track_Key][dynamic][2]int  // parallel arrays of {month, year}
+		track_days: map[Track_Key][dynamic]Day_Play
 		defer {
-			for _, &v in track_plays_month { delete(v) }
-			delete(track_plays_month)
+			for _, &v in track_days { delete(v) }
+			delete(track_days)
 		}
-
 		for &p in plays {
-			k := Track_Key{p.track, p.artist}
-			day_num := p.year * 366 + p.month * 31 + p.day
-			if k not_in track_plays_list {
-				track_plays_list[k] = {}
-				track_plays_month[k] = {}
-			}
-			append(&track_plays_list[k], day_num)
-			append(&track_plays_month[k], [2]int{p.month, p.year})
+			k := play_key(p)
+			if k not_in track_days do track_days[k] = {}
+			append(&track_days[k], Day_Play{p.ordinal, p.year, p.month})
 		}
 
 		earworm_list: [dynamic]Earworm_Stat
 		defer delete(earworm_list)
 		earworm_total_count := 0
 
-		for k, &days in track_plays_list {
+		for k, &days in track_days {
 			if len(days) < 5 do continue
-			slice.sort(days[:])
-			months := track_plays_month[k]
+			slice.stable_sort_by(days[:], proc(a, b: Day_Play) -> bool { return a.ordinal < b.ordinal })
 
 			best_count := 0
 			best_idx := 0
 
-			// Sliding window: for each play, count how many plays fall within 7 days
+			// For each play, count the plays that fall within 7 days of it
 			for i in 0..<len(days) {
 				count := 0
 				for j in i..<len(days) {
-					if days[j] - days[i] < 7 {
+					if days[j].ordinal - days[i].ordinal < 7 {
 						count += 1
 					} else {
 						break
@@ -337,9 +390,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 
 			if best_count >= 5 {
 				month_names := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
-				m := months[best_idx][0]
-				y := months[best_idx][1]
-				period := fmt.aprintf("%s %d", month_names[m], y)
+				period := fmt.aprintf("%s %d", month_names[days[best_idx].month], days[best_idx].year)
 				append(&earworm_list, Earworm_Stat{k.track, k.artist, best_count, period})
 			}
 			if best_count >= 15 {
@@ -347,7 +398,9 @@ compute_stats :: proc(plays: []Play) -> Stats {
 			}
 		}
 
-		slice.sort_by(earworm_list[:], proc(a, b: Earworm_Stat) -> bool { return a.plays > b.plays })
+		slice.sort_by(earworm_list[:], proc(a, b: Earworm_Stat) -> bool {
+			return ranks_before(a.plays, Track_Key{a.track, a.artist}, b.plays, Track_Key{b.track, b.artist})
+		})
 
 		stats.earworm_total = earworm_total_count
 		for i in 0..<min(20, len(earworm_list)) {
@@ -358,35 +411,31 @@ compute_stats :: proc(plays: []Play) -> Stats {
 		}
 	}
 
-	// Skip rate per year (first and last years)
+	// Skip rate per year (first and last years). Counted over every record with
+	// a track and artist (see Skip_Tally), falling back to the qualifying plays'
+	// own `skipped` flag when no tally was supplied.
 	if len(years) > 0 {
 		first_yr := years[0]
 		last_yr := years[len(years) - 1]
 
-		first_total := 0
-		first_skipped := 0
-		last_total := 0
-		last_skipped := 0
-
-		for &p in plays {
-			if p.year == first_yr {
-				first_total += 1
-				if p.skipped do first_skipped += 1
+		rate :: proc(plays: []Play, tally: ^Skip_Tally, yr: int) -> int {
+			total, skipped := 0, 0
+			if tally != nil {
+				total, skipped = tally.year_total[yr], tally.year_skips[yr]
+			} else {
+				for &p in plays {
+					if p.year != yr do continue
+					total += 1
+					if p.skipped do skipped += 1
+				}
 			}
-			if p.year == last_yr {
-				last_total += 1
-				if p.skipped do last_skipped += 1
-			}
+			return skipped * 100 / total if total > 0 else 0
 		}
 
 		stats.skip_rate_first_yr = first_yr
 		stats.skip_rate_last_yr = last_yr
-		if first_total > 0 {
-			stats.skip_rate_first = first_skipped * 100 / first_total
-		}
-		if last_total > 0 {
-			stats.skip_rate_last = last_skipped * 100 / last_total
-		}
+		stats.skip_rate_first = rate(plays, tally, first_yr)
+		stats.skip_rate_last = rate(plays, tally, last_yr)
 	}
 
 	// Average track length per year
@@ -504,7 +553,10 @@ compute_stats :: proc(plays: []Play) -> Stats {
 		for name, count in platform_counts {
 			append(&plat_list, Platform_Stat{name, count})
 		}
-		slice.sort_by(plat_list[:], proc(a, b: Platform_Stat) -> bool { return a.count > b.count })
+		slice.sort_by(plat_list[:], proc(a, b: Platform_Stat) -> bool {
+			if a.count != b.count do return a.count > b.count
+			return a.name < b.name
+		})
 
 		for &ps in plat_list {
 			append(&stats.platforms, ps)
@@ -521,7 +573,7 @@ compute_stats :: proc(plays: []Play) -> Stats {
 		for a, ms in yam {
 			append(&yr_artists, Artist_Stat{a, f64(ms) / 3600000})
 		}
-		slice.sort_by(yr_artists[:], proc(a, b: Artist_Stat) -> bool { return a.hours > b.hours })
+		slice.sort_by(yr_artists[:], artist_before)
 
 		yt: Year_Top
 		yt.year = y
@@ -584,22 +636,17 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 	stats.genre_classified = classified
 	stats.genre_other_pct = f64(other_ms) / f64(max(total_ms, 1)) * 100
 
-	// Genre share by quarter (exclude last year if incomplete)
+	// Genre share by quarter. A quarter is partial when the data does not span
+	// all of it (typically the current quarter, or the one the history starts in);
+	// partial quarters are kept and flagged rather than dropped.
 	quarter_genre_ms: map[string]map[string]i64
 	defer {
 		for _, &m in quarter_genre_ms { delete(m) }
 		delete(quarter_genre_ms)
 	}
 
-	max_year := 0
 	for &p in plays {
-		if p.year > max_year do max_year = p.year
-	}
-
-	for &p in plays {
-		if p.year >= max_year do continue  // skip incomplete year
-
-		q := fmt.aprintf("%d-Q%d", p.year, (p.month - 1) / 3 + 1)
+		q := quarter_label(p.year, p.month)
 		genre := "Other"
 		if p.artist in genre_map {
 			genre = genre_map[p.artist]
@@ -626,6 +673,7 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 
 		gq: Genre_Quarter
 		gq.quarter = q
+		gq.partial = quarter_partial(q, stats.first_ordinal, stats.last_ordinal)
 		gq.values = {}
 		for g in GENRE_ORDER_DEFAULT {
 			ms: i64 = 0
@@ -637,12 +685,26 @@ compute_genre_stats :: proc(stats: ^Stats, plays: []Play, genre_map: map[string]
 	}
 }
 
-estimate_gap_seconds :: proc(a, b: Play) -> i64 {
-	da := i64(a.year) * 366 * 86400 + i64(a.month) * 31 * 86400 + i64(a.day) * 86400 + i64(a.hour) * 3600 + i64(a.minute) * 60
-	db := i64(b.year) * 366 * 86400 + i64(b.month) * 31 * 86400 + i64(b.day) * 86400 + i64(b.hour) * 3600 + i64(b.minute) * 60
-	diff := db - da
-	if diff < 0 do diff = -diff
-	return diff
+quarter_label :: proc(year, month: int) -> string {
+	return fmt.aprintf("%d-Q%d", year, (month - 1) / 3 + 1)
+}
+
+// Whether the data, spanning [first, last] local days, fails to cover every
+// day of the quarter named by a "YYYY-Qn" label.
+quarter_partial :: proc(label: string, first, last: i64) -> bool {
+	if len(label) < 7 do return true
+	year := parse_int(label[0:4])
+	q := int(label[6] - '0')
+	m0 := (q - 1) * 3 + 1
+	start := date_ordinal(year, m0, 1)
+	end := date_ordinal(year, m0 + 2, days_in_month(year, m0 + 2))
+	return first > start || last < end
+}
+
+// Hours descending, then name ascending.
+artist_before :: proc(a, b: Artist_Stat) -> bool {
+	if a.hours != b.hours do return a.hours > b.hours
+	return a.name < b.name
 }
 
 format_month_year :: proc(y, m: int) -> string {
@@ -663,7 +725,7 @@ top_n_artists :: proc(m: map[string]i64, n: int) -> [dynamic]Artist_Stat {
 	for name, ms in m {
 		append(&items, Artist_Stat{name, f64(ms) / 3600000})
 	}
-	slice.sort_by(items[:], proc(a, b: Artist_Stat) -> bool { return a.hours > b.hours })
+	slice.sort_by(items[:], artist_before)
 	result: [dynamic]Artist_Stat
 	for i in 0..<min(n, len(items)) {
 		append(&result, items[i])
@@ -677,7 +739,11 @@ top_n_albums :: proc(m: map[Track_Key]i64, n: int) -> [dynamic]Album_Stat {
 	for k, ms in m {
 		append(&items, Album_Stat{k.track, k.artist, f64(ms) / 3600000})
 	}
-	slice.sort_by(items[:], proc(a, b: Album_Stat) -> bool { return a.hours > b.hours })
+	slice.sort_by(items[:], proc(a, b: Album_Stat) -> bool {
+		if a.hours != b.hours do return a.hours > b.hours
+		if a.artist != b.artist do return a.artist < b.artist
+		return a.album < b.album
+	})
 	result: [dynamic]Album_Stat
 	for i in 0..<min(n, len(items)) {
 		append(&result, items[i])
@@ -691,7 +757,9 @@ top_n_openers :: proc(m: map[Track_Key]int, n: int) -> [dynamic]Opener_Stat {
 	for k, c in m {
 		if c > 0 { append(&items, Opener_Stat{k.track, k.artist, c}) }
 	}
-	slice.sort_by(items[:], proc(a, b: Opener_Stat) -> bool { return a.count > b.count })
+	slice.sort_by(items[:], proc(a, b: Opener_Stat) -> bool {
+		return ranks_before(a.count, Track_Key{a.track, a.artist}, b.count, Track_Key{b.track, b.artist})
+	})
 	result: [dynamic]Opener_Stat
 	for i in 0..<min(n, len(items)) {
 		append(&result, items[i])

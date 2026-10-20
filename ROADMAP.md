@@ -17,7 +17,8 @@ Two rules shape everything below:
    models live in an optional sidecar that communicates through cached files on
    disk. You can delete the sidecar and the tool still works.
 
-Status: nothing in this document is implemented yet. Phase numbers are
+Status: **Phase 0 is implemented** (see its section for what shipped and the
+decisions made along the way); Phases 1–7 are planned. Phase numbers are
 dependency order, not a schedule.
 
 ---
@@ -111,6 +112,35 @@ hosted runners can't get an Odin toolchain cheaply.
 
 **Done when:** all fixtures pass, two consecutive runs on the sample produce
 identical output, and the README/FRAMEWORK metric definitions match the code.
+
+### Phase 0 outcome
+
+Implemented. `odin test src -define:ODIN_TEST_TRACK_MEMORY=false` runs 22 tests
+(calendar fixtures, metric goldens, tie determinism, parser robustness, and the
+sample end to end). Decisions worth knowing:
+
+- **P0-3 timezone:** `--timezone`, then the config file's `timezone`, then `$TZ`,
+  then `America/Los_Angeles` (what the old fixed offset approximated). The
+  resolved zone is shown in the progress output and the report footer. Without
+  system zoneinfo it falls back to a fixed UTC−8 and says so.
+- **Stdlib quirk:** `core:time/timezone` returns the *previous* offset for the
+  exact second a DST change takes effect. `region_offset` in `calendar.odin`
+  probes one second later to get the right answer; `test_timezone_follows_dst`
+  pins both transitions.
+- **P0-6:** buckets are now disjoint with precedence top-10 → new this year →
+  rest. On the sample, 2020 used to sum to 184% (new 100 + top-10 84).
+- **P0-7:** all quarters are kept; each carries a `partial` flag and the report
+  labels it. The "<year> in progress" subtitle is now computed, not hard-coded.
+- **P0-11:** skip rate follows the documented definition (short plays count as
+  skips), and never-skipped now excludes any track with a sub-30s play. Total
+  hours stays over qualifying plays and the *docs* were corrected, so it keeps
+  matching the sum of hours by year. Consequence: the fictional sample, whose
+  skips are uniformly random, no longer has any never-skipped track.
+- **P0-4:** the sample export gained fabricated `spotify_track_uri`,
+  `reason_*`, `shuffle`, `offline` and `conn_country` fields via
+  `scripts/add-sample-fields.py`, so the URI path is exercised end to end.
+- **P0-5:** all keying goes through `track_key`/`play_key` in `stats.odin`;
+  Phase 1 changes that one function.
 
 ---
 

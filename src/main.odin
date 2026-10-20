@@ -38,6 +38,7 @@ main :: proc() {
 	cli_provider := ""
 	cli_key := ""
 	cli_model := ""
+	cli_timezone := ""
 
 	i := 2
 	for i < len(args) {
@@ -53,6 +54,8 @@ main :: proc() {
 			if i + 1 < len(args) { i += 1; cli_key = args[i]; cli_provider = "openrouter" }
 		case a == "--model":
 			if i + 1 < len(args) { i += 1; cli_model = args[i] }
+		case a == "--timezone" || a == "--tz":
+			if i + 1 < len(args) { i += 1; cli_timezone = args[i] }
 		case !strings.has_prefix(a, "-"):
 			opts.output_path = a
 		}
@@ -72,6 +75,7 @@ main :: proc() {
 		cfg.model = cli_model
 	}
 	opts.provider, opts.api_key, opts.model = resolve_provider(cfg)
+	opts.timezone = resolve_timezone(cli_timezone, cfg)
 
 	interactive := is_tty(STDIN_FD) && is_tty(STDOUT_FD) && !force_plain
 	if interactive && run_tui(opts) do return

@@ -165,7 +165,8 @@ src/
 ├── tabs.odin      dashboard tab contents
 ├── setup.odin     `--setup` TUI
 ├── tui.odin       static screens: --help, --guide
-├── parser.odin    Spotify JSON deserialization, timestamp parsing (UTC→PST)
+├── parser.odin    Spotify JSON deserialization, record → play conversion
+├── calendar.odin  timestamps → local time (named timezone, true day ordinals)
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache
 ├── llm.odin       LLM genre classification (Anthropic/OpenAI/OpenRouter via curl)
@@ -189,12 +190,15 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 | Session detection | Gap > 30 minutes between consecutive plays |
 | Earworm | Sliding 7-day window per track, report max plays |
 | Longest streak | Consecutive calendar days with at least one qualifying play |
-| Skip | `ms_played < 30000` counts as a skip |
+| Skip | `skipped: true` or `ms_played < 30000`, counted over every record with a track and artist (including the short plays dropped from the rest of the stats) |
+| Never-skipped | 15+ qualifying plays and not a single skip as defined above |
 | Loyalty | Artist has qualifying plays in every active year |
-| Heatmap | Hours summed per (day-of-week, hour-of-day) bucket, Pacific time |
-| Explore vs. obsess | Per year: % of time on new artists / top-10 all-time / rest |
+| Heatmap | Hours summed per (day-of-week, hour-of-day) bucket, in your timezone |
+| Explore vs. obsess | Per year: % of time on top-10 all-time artists / other artists new that year / the rest (disjoint; a new artist who is also top-10 counts as top-10) |
 
-All timestamps are adjusted to Pacific time (UTC−8) before bucketing.
+Timestamps are converted to a named timezone (DST included) before bucketing, so days, streaks, weekdays and hours match your wall clock. Pick the zone with `--timezone Europe/Berlin`, a `"timezone"` key in the config file, or `$TZ`; the default is `America/Los_Angeles`. It needs the system zoneinfo database; without one the tool falls back to a fixed UTC−8 and says so in the report footer and progress output.
+
+Rankings break ties by name, so the same export always produces the same report. A partial final year or quarter is kept and labelled as partial rather than dropped.
 
 ## Genre classification
 

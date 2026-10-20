@@ -12,6 +12,7 @@ Config :: struct {
 	openrouter_key: string,
 	provider:       string,
 	model:          string,
+	timezone:       string,
 }
 
 LLM_Provider :: enum {
@@ -51,6 +52,7 @@ load_config :: proc() -> Config {
 		openrouter_key: string,
 		provider:       string,
 		model:          string,
+		timezone:       string,
 	}
 	raw: Raw_Config
 	json_err := json.unmarshal(data, &raw)
@@ -62,6 +64,7 @@ load_config :: proc() -> Config {
 	cfg.openrouter_key = raw.openrouter_key
 	cfg.provider = raw.provider
 	cfg.model = raw.model
+	cfg.timezone = raw.timezone
 	return cfg
 }
 
@@ -77,12 +80,22 @@ save_config :: proc(cfg: Config) -> bool {
 	strings.write_string(&j, fmt.aprintf("  \"anthropic_key\": \"%s\",\n", json_escape(cfg.anthropic_key)))
 	strings.write_string(&j, fmt.aprintf("  \"openrouter_key\": \"%s\",\n", json_escape(cfg.openrouter_key)))
 	strings.write_string(&j, fmt.aprintf("  \"provider\": \"%s\",\n", json_escape(cfg.provider)))
-	strings.write_string(&j, fmt.aprintf("  \"model\": \"%s\"\n", json_escape(cfg.model)))
+	strings.write_string(&j, fmt.aprintf("  \"model\": \"%s\",\n", json_escape(cfg.model)))
+	strings.write_string(&j, fmt.aprintf("  \"timezone\": \"%s\"\n", json_escape(cfg.timezone)))
 	strings.write_string(&j, "}\n")
 
 	path := config_path()
 	// The file holds API keys: owner-only.
 	return os.write_entire_file(path, transmute([]u8)strings.to_string(j), {.Read_User, .Write_User}) == nil
+}
+
+// Local-time zone for bucketing plays: --timezone, then the config file, then
+// $TZ, then DEFAULT_TIMEZONE (what earlier versions hard-coded as UTC-8).
+resolve_timezone :: proc(cli: string, cfg: Config) -> string {
+	if len(cli) > 0 do return cli
+	if len(cfg.timezone) > 0 do return cfg.timezone
+	if tz := os.get_env_alloc("TZ", context.allocator); len(tz) > 0 do return tz
+	return DEFAULT_TIMEZONE
 }
 
 resolve_provider :: proc(cfg: Config) -> (LLM_Provider, string, string) {

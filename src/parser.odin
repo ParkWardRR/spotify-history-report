@@ -16,6 +16,12 @@ Streaming_Record :: struct {
 	master_metadata_album_album_name:  Maybe(string),
 	platform:                          Maybe(string),
 	skipped:                           Maybe(bool),
+	spotify_track_uri:                 Maybe(string),
+	reason_start:                      Maybe(string),
+	reason_end:                        Maybe(string),
+	shuffle:                           Maybe(bool),
+	offline:                           Maybe(bool),
+	conn_country:                      Maybe(string),
 }
 
 Play :: struct {
@@ -24,7 +30,9 @@ Play :: struct {
 	day:      int,
 	hour:     int,
 	minute:   int,
-	weekday:  int,
+	weekday:  int, // 0 = Monday … 6 = Sunday
+	ordinal:  i64, // local calendar day number; consecutive days differ by 1
+	unix:     i64, // UTC seconds, for gaps between plays
 	ms:       i64,
 	track:    string,
 	artist:   string,
@@ -32,6 +40,13 @@ Play :: struct {
 	platform: string,
 	skipped:  bool,
 	ts_raw:   string,
+	// Identity and context from the export (empty when absent).
+	uri:          string, // spotify:track:<id>
+	reason_start: string,
+	reason_end:   string,
+	conn_country: string,
+	shuffle:      bool,
+	offline:      bool,
 }
 
 Stats :: struct {
@@ -80,10 +95,17 @@ Stats :: struct {
 	genre_colors:       map[string]string,
 	genre_classified:   int,
 	genre_other_pct:    f64,
+	// Coverage: the span of local days the data covers, for completeness checks.
+	first_ordinal:      i64,
+	last_ordinal:       i64,
+	last_year:          int,
+	last_year_partial:  bool,
+	timezone:           string, // description of how local time was derived
 }
 
 Genre_Quarter :: struct {
 	quarter: string,
+	partial: bool, // the data does not cover the whole quarter
 	values:  map[string]f64,
 }
 
@@ -168,57 +190,62 @@ parse_int :: proc(s: string) -> int {
 	return result
 }
 
-parse_ts_fields :: proc(ts: string) -> (year, month, day, hour, minute, weekday: int) {
-	if len(ts) < 19 do return
+MIN_PLAY_MS :: 30000
 
-	y := parse_int(ts[0:4])
-	m := parse_int(ts[5:7])
-	d := parse_int(ts[8:10])
-	h := parse_int(ts[11:13])
-	mi := parse_int(ts[14:16])
-
-	// Pacific time offset (-8h)
-	h -= 8
-	if h < 0 {
-		h += 24
-		d -= 1
-		if d < 1 {
-			m -= 1
-			if m < 1 {
-				m = 12
-				y -= 1
-			}
-			d = days_in_month(y, m)
-		}
-	}
-
-	year = y
-	month = m
-	day = d
-	hour = h
-	minute = mi
-
-	// Zeller's formula for day of week (0=Sun, 1=Mon, ..., 6=Sat)
-	zy := y
-	zm := m
-	if zm < 3 {
-		zm += 12
-		zy -= 1
-	}
-	q := d
-	k := zy % 100
-	j := zy / 100
-	dow := (q + (13 * (zm + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7
-	if dow < 0 do dow += 7
-	// Convert from Zeller (0=Sun..6=Sat) to ISO (0=Mon..6=Sun)
-	weekday = (dow + 6) % 7
-	return
+Record_Status :: enum {
+	Ok,
+	Not_A_Track,   // podcast/audiobook/unknown row: no track or artist name
+	Bad_Timestamp, // `ts` is not a valid ISO 8601 UTC timestamp
 }
 
-days_in_month :: proc(y, m: int) -> int {
-	days := [13]int{0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
-	if m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) do return 29
-	return days[m]
+// Converts one export row. The returned Play is populated whenever the status
+// is .Ok, including for plays shorter than MIN_PLAY_MS; the caller decides
+// whether a short play qualifies (see `qualifies`) and feeds the skip tally.
+record_to_play :: proc(rec: Streaming_Record, c: ^Clock) -> (p: Play, status: Record_Status) {
+	track := rec.master_metadata_track_name.? or_else ""
+	artist := rec.master_metadata_album_artist_name.? or_else ""
+	if len(track) == 0 || len(artist) == 0 do return {}, .Not_A_Track
+
+	lt, ok := parse_ts(rec.ts, c)
+	if !ok do return {}, .Bad_Timestamp
+
+	return Play{
+		year         = lt.year,
+		month        = lt.month,
+		day          = lt.day,
+		hour         = lt.hour,
+		minute       = lt.minute,
+		weekday      = lt.weekday,
+		ordinal      = lt.ordinal,
+		unix         = lt.unix,
+		ms           = rec.ms_played,
+		track        = track,
+		artist       = artist,
+		album        = rec.master_metadata_album_album_name.? or_else "",
+		platform     = rec.platform.? or_else "",
+		skipped      = rec.skipped.? or_else false,
+		ts_raw       = rec.ts,
+		uri          = rec.spotify_track_uri.? or_else "",
+		reason_start = rec.reason_start.? or_else "",
+		reason_end   = rec.reason_end.? or_else "",
+		conn_country = rec.conn_country.? or_else "",
+		shuffle      = rec.shuffle.? or_else false,
+		offline      = rec.offline.? or_else false,
+	}, .Ok
+}
+
+qualifies :: proc(p: Play) -> bool {
+	return p.ms >= MIN_PLAY_MS
+}
+
+// A skip is an explicit `skipped` flag or a play cut off before MIN_PLAY_MS.
+is_skip :: proc(p: Play) -> bool {
+	return p.skipped || p.ms < MIN_PLAY_MS
+}
+
+// Chronological order; ties keep file order so output is reproducible.
+sort_plays :: proc(plays: []Play) {
+	slice.stable_sort_by(plays, proc(a, b: Play) -> bool { return a.unix < b.unix })
 }
 
 find_json_files :: proc(dir: string) -> [dynamic]string {

@@ -27,10 +27,10 @@ The LLM receives Spotify Extended Streaming History JSON files (GDPR export). Ea
 | Metric | Definition |
 |--------|-----------|
 | Total plays | Count of qualifying plays |
-| Total hours | Sum of `ms_played` / 3,600,000 for all records with a track name |
+| Total hours | Sum of `ms_played` / 3,600,000 over qualifying plays (so it matches the sum of hours by year) |
 | Unique artists | Distinct artist names in qualifying plays |
 | Unique tracks | Distinct (track, artist) pairs |
-| Date range | Min/max timestamps, Pacific time adjusted |
+| Date range | Min/max timestamps in the configured timezone |
 
 ### Layer 2: Behavioral patterns
 
@@ -38,8 +38,8 @@ The LLM receives Spotify Extended Streaming History JSON files (GDPR export). Ea
 |----------|--------|
 | Most played song | Max count of (track, artist) |
 | Earworm detection | Sliding 7-day window per track, report max plays in any window |
-| Longest streak | Consecutive calendar days (PST-adjusted) with ≥1 play |
-| Skip rate trend | % of plays with `ms_played < 30000` or `skipped: true`, by year |
+| Longest streak | Consecutive calendar days (configured timezone) with ≥1 play |
+| Skip rate trend | % of records (with a track and artist) that have `ms_played < 30000` or `skipped: true`, by year; short plays count here even though they are not qualifying plays |
 | Session detection | Gap > 30 minutes between consecutive plays = new session |
 | Session openers | First track in each session, ranked by frequency |
 | Never-skipped songs | ≥15 total plays, 0 plays under 30 seconds |
@@ -60,7 +60,7 @@ The LLM receives Spotify Extended Streaming History JSON files (GDPR export). Ea
 | Analysis | Method |
 |----------|--------|
 | New artists per year | Count artists whose first qualifying play falls in that year |
-| Explore vs. obsess | % of year's listening: new artists / top-10 all-time / rest |
+| Explore vs. obsess | % of year's listening, as disjoint buckets: top-10 all-time / other artists first heard that year / rest |
 | Concentration index | % of total hours in top 1 / 5 / 10 / 25 / 50 / 100 artists |
 | Songs for 50% | How many top tracks account for half of all plays |
 | Loyal artists | Artists with qualifying plays in every active year |
@@ -137,7 +137,7 @@ Phase 1 — Data processing:
 - Load all JSON files, filter to qualifying plays (≥30s, has track+artist)
 - Compute all Layer 1-4 metrics listed in the framework
 - Apply the provided GENRE_MAP for Layer 5 classification
-- Adjust all timestamps to Pacific time (UTC-8)
+- Convert all timestamps to the listener's timezone (a named IANA zone, DST-aware)
 
 Phase 2 — HTML generation:
 - Single self-contained HTML file
