@@ -6,3 +6,4 @@ spotify-history-report
 .DS_Store
 dist/
 .shr/
+tools/review-server/review-server
