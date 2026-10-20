@@ -59,6 +59,7 @@ Run_Opts :: struct {
 	api_key:     string,
 	model:       string,
 	timezone:    string, // IANA name; empty means the default
+	decay:       f64,    // memory decay for the behaviour scores; 0 means the default
 }
 
 emit: proc(msg: Msg) = proc(msg: Msg) {}
@@ -190,6 +191,7 @@ run_pipeline :: proc(o: Run_Opts) {
 	stats := new(Stats)
 	stats^ = compute_stats(all_plays[:], tally)
 	stats.timezone = clock_label(clock)
+	stats.scores = compute_scores(all_plays[:], o.decay if o.decay > 0 else DEFAULT_DECAY)
 	stats.identity = table.summary
 	for c, i in table.candidates {
 		if i >= 10 do break

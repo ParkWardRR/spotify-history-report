@@ -11,6 +11,7 @@ build_tab :: proc(t: Tab, s: ^Stats, cw: int) -> string {
 	case .Overview: return build_overview(s, cw)
 	case .Artists:  return build_artists(s, cw)
 	case .Library:  return build_library(s, cw)
+	case .Habits:   return build_habits(s, cw)
 	case .Rhythm:   return build_rhythm(s, cw)
 	case .Genres:   return build_genres(s, cw)
 	}
@@ -347,6 +348,42 @@ build_library :: proc(s: ^Stats, cw: int) -> string {
 			append(&out, "", list_table(rows[:], cw, NORD13))
 		}
 	}
+	return join_v(out[:])
+}
+
+// ── Habits ───────────────────────────────────────────────────────────────────
+
+habit_section :: proc(out: ^[dynamic]string, title, why: string, items: []Track_Score, color: Nord, detail: proc(t: Track_Score) -> string, cw: int) {
+	append(out, section(title, cw))
+	append(out, muted(wrap_text(why, cw)))
+	if len(items) == 0 {
+		append(out, faint("  nothing in your history meets this definition"), "")
+		return
+	}
+	rows := make([dynamic]Row3, context.temp_allocator)
+	for t in items do append(&rows, Row3{t.track, t.artist, detail(t)})
+	append(out, list_table(rows[:], cw, color), "")
+}
+
+build_habits :: proc(s: ^Stats, cw: int) -> string {
+	out := make([dynamic]string, context.temp_allocator)
+	sc := &s.scores
+	if len(sc.ref_date) == 0 do return muted("No listening data.")
+
+	append(&out, muted(wrap_text(fmt.tprintf("As of %s, the last day in your data. These views overlap on purpose: a favourite you are bingeing this week is both.", sc.ref_date), cw)), "")
+	habit_section(&out, "Long-term favourites", why_favourites(), sc.favourites[:], NORD14,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%d plays · %d months", t.plays, t.months_active) }, cw)
+	habit_section(&out, "Current obsessions", why_obsessions(), sc.obsessions[:], NORD11,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%d plays in %d days", t.recent_plays, HOT_WINDOW_DAYS) }, cw)
+	habit_section(&out, "Rediscoveries", why_rediscoveries(), sc.rediscoveries[:], NORD15,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%d plays · silent %d mo", t.plays, t.days_since_last * 10 / 304) }, cw)
+	habit_section(&out, "Likely to come back to", why_warm(), sc.warm[:], NORD13,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%d plays", t.plays) }, cw)
+	habit_section(&out, "Reach-for-first", why_openers(), sc.openers[:], NORD7,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%.0f%% of %d plays", t.opener_rate * 100, t.plays) }, cw)
+	habit_section(&out, "Last song of the night", why_closers(), sc.closers[:], NORD9,
+		proc(t: Track_Score) -> string { return fmt.tprintf("%.0f%% of %d plays", t.closer_rate * 100, t.plays) }, cw)
+	append(&out, muted("Run with --scores to test how well this model predicts your own replays."))
 	return join_v(out[:])
 }
 

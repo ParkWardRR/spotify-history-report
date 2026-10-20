@@ -459,7 +459,7 @@
     opacity: 0.7;
   }
 
-  .opener-grid, .album-grid, .noskip-grid {
+  .opener-grid, .album-grid, .noskip-grid, .habit-grid {
     display: grid;
     grid-template-columns: 1fr;
     gap: 0;
@@ -493,6 +493,12 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
+
+  .habit-block { margin-top: 22px; }
+  .habit-block:first-of-type { margin-top: 8px; }
+  .habit-block h4 { font-size: 15px; margin: 0 0 2px; color: var(--ink); }
+  .habit-why { font-size: 12.5px; color: var(--muted); margin: 0 0 6px; line-height: 1.45; }
+  .habit-none { font-size: 13px; color: var(--muted); padding: 8px 0; }
 
   .source {
     font-size: 11px;
@@ -568,6 +574,16 @@
     <h2>Songs I couldn't stop playing</h2>
     <h3 id="earworms-subtitle"></h3>
     <div class="earworm-grid" id="earworms-grid"></div>
+  </div>
+
+  <!-- Favourites, obsessions, rediscoveries -->
+  <div class="section" id="habits-section" hidden>
+    <h2>What stays, what burns out, what I forgot</h2>
+    <h3 id="habits-subtitle"></h3>
+    <div class="habit-block"><h4>Long-term favourites</h4><p class="habit-why" id="why-favourites"></p><div class="habit-grid" id="grid-favourites"></div></div>
+    <div class="habit-block"><h4>Current obsessions</h4><p class="habit-why" id="why-obsessions"></p><div class="habit-grid" id="grid-obsessions"></div></div>
+    <div class="habit-block"><h4>Rediscoveries</h4><p class="habit-why" id="why-rediscoveries"></p><div class="habit-grid" id="grid-rediscoveries"></div></div>
+    <div class="habit-block"><h4>Likely to come back to</h4><p class="habit-why" id="why-warm"></p><div class="habit-grid" id="grid-warm"></div></div>
   </div>
 
   <!-- Session openers -->
@@ -784,7 +800,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
   loyalists.forEach(a => {
     const item = document.createElement('div');
     item.className = 'loyal-item';
-    item.innerHTML = `<span>${a.name}</span><span class="loyal-item-hours">${Math.round(a.hours)}h</span>`;
+    item.innerHTML = `<span>${escapeHtml(a.name)}</span><span class="loyal-item-hours">${Math.round(a.hours)}h</span>`;
     lg.appendChild(item);
   });
 
@@ -799,7 +815,7 @@ const GENRE_COLORS = DATA.genre_colors || {};
     const pct = (a.hours / maxAH * 100).toFixed(6);
     const row = document.createElement('div');
     row.className = 'artist-row';
-    row.innerHTML = `<div class="artist-name">${a.name}</div>`
+    row.innerHTML = `<div class="artist-name">${escapeHtml(a.name)}</div>`
       + `<div class="artist-bar-wrap"><div class="artist-bar" style="width:${pct}%"></div></div>`
       + `<div class="artist-hours">${Math.round(a.hours)} h</div>`;
     ab.appendChild(row);
@@ -817,10 +833,33 @@ const GENRE_COLORS = DATA.genre_colors || {};
       const div = document.createElement('div');
       div.className = 'earworm';
       div.innerHTML = `<div class="earworm-count">${e.plays}</div>`
-        + `<div class="earworm-info"><div class="earworm-track">${e.track}</div>`
-        + `<div class="earworm-artist">${e.artist}, week of ${e.period || e.week || ''}</div></div>`;
+        + `<div class="earworm-info"><div class="earworm-track">${escapeHtml(e.track)}</div>`
+        + `<div class="earworm-artist">${escapeHtml(e.artist)}, week of ${escapeHtml(e.period || e.week || '')}</div></div>`;
       eg.appendChild(div);
     });
+  }
+
+  // ─── Favourites, obsessions, rediscoveries ──────────────
+  if (D.scores) {
+    document.getElementById('habits-section').hidden = false;
+    document.getElementById('habits-subtitle').textContent =
+      `As of ${D.scores.ref_date}, the last day in the data. These overlap on purpose: a favourite you are bingeing this week is both.`;
+    const habit = (key, meta) => {
+      const view = D.scores[key] || {items: [], why: ''};
+      document.getElementById('why-' + key).textContent = view.why;
+      const grid = document.getElementById('grid-' + key);
+      if (!view.items.length) {
+        grid.innerHTML = '<div class="habit-none">Nothing meets this definition in your history.</div>';
+        return;
+      }
+      renderListSection('grid-' + key, view.items, s => ({
+        primary: s.track, secondary: s.artist, meta: meta(s)
+      }));
+    };
+    habit('favourites', s => `${s.plays} plays · ${s.months} months`);
+    habit('obsessions', s => `${s.recent} plays in ${D.scores.hot_days} days`);
+    habit('rediscoveries', s => `${s.plays} plays · silent ${Math.round(s.silent_days / 30.4)} months`);
+    habit('warm', s => `${s.plays} plays`);
   }
 
   // ─── Session openers ────────────────────────────────────
@@ -838,15 +877,20 @@ const GENRE_COLORS = DATA.genre_colors || {};
     primary: s.track, secondary: s.artist, meta: `${s.plays} plays`
   }));
 
+  function escapeHtml(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   function renderListSection(id, items, fn) {
     const el = document.getElementById(id);
     items.forEach((item, i) => {
       const info = fn(item);
       const row = document.createElement('div');
       row.className = 'list-row';
+      const e = escapeHtml;
       row.innerHTML = `<span class="list-rank">${i+1}</span>`
-        + `<span class="list-title"><strong>${info.primary}</strong> <span class="list-artist">${info.secondary}</span></span>`
-        + `<span class="list-meta">${info.meta}</span>`;
+        + `<span class="list-title"><strong>${e(info.primary)}</strong> <span class="list-artist">${e(info.secondary)}</span></span>`
+        + `<span class="list-meta">${e(info.meta)}</span>`;
       el.appendChild(row);
     });
   }

@@ -18,6 +18,7 @@ Tab :: enum {
 	Overview,
 	Artists,
 	Library,
+	Habits,
 	Rhythm,
 	Genres,
 }
@@ -26,6 +27,7 @@ TAB_TITLES := [Tab]string{
 	.Overview = "Overview",
 	.Artists  = "Artists",
 	.Library  = "Library",
+	.Habits   = "Habits",
 	.Rhythm   = "Rhythm",
 	.Genres   = "Genres",
 }

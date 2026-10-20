@@ -83,6 +83,26 @@ report_json :: proc(s: Stats) -> string {
 	summary_json(&j, s.identity)
 	w(&j, ",")
 
+	// Listening-behaviour views, each with its own plain-English definition.
+	score_list :: proc(j: ^strings.Builder, name, why: string, list: []Track_Score, esc: proc(string) -> string) {
+		strings.write_string(j, fmt.aprintf("\"%s\":{{\"why\":\"%s\",\"items\":[", name, esc(why)))
+		for t, i in list {
+			if i > 0 do strings.write_string(j, ",")
+			strings.write_string(j, fmt.aprintf(
+				"{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d,\"months\":%d,\"recent\":%d,\"silent_days\":%d,\"activation\":%.2f,\"opener_rate\":%.3f,\"closer_rate\":%.3f}}",
+				esc(t.track), esc(t.artist), t.plays, t.months_active, t.recent_plays, t.days_since_last,
+				t.activation, t.opener_rate, t.closer_rate))
+		}
+		strings.write_string(j, "]}")
+	}
+	wf(&j, "\"scores\":{{\"ref_date\":\"%s\",\"decay\":%.2f,\"hot_days\":%d,", esc(s.scores.ref_date), s.scores.decay, HOT_WINDOW_DAYS)
+	score_list(&j, "favourites", why_favourites(), s.scores.favourites[:], esc); w(&j, ",")
+	score_list(&j, "obsessions", why_obsessions(), s.scores.obsessions[:], esc); w(&j, ",")
+	score_list(&j, "rediscoveries", why_rediscoveries(), s.scores.rediscoveries[:], esc); w(&j, ",")
+	score_list(&j, "warm", why_warm(), s.scores.warm[:], esc); w(&j, ",")
+	score_list(&j, "openers", why_openers(), s.scores.openers[:], esc)
+	w(&j, "},")
+
 	// Most played song
 	wf(&j, "\"most_played_song\":{{\"track\":\"%s\",\"artist\":\"%s\",\"plays\":%d}},",
 		esc(s.most_played_song.track), esc(s.most_played_song.artist), s.most_played_song.plays)

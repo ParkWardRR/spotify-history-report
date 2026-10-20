@@ -2,6 +2,7 @@ package spotify_report
 
 import "core:fmt"
 import "core:os"
+import "core:strconv"
 import "core:strings"
 import "core:thread"
 
@@ -11,6 +12,7 @@ main :: proc() {
 	args := os.args
 	force_plain := false
 	identities_only := false
+	scores_only := false
 
 	for a in args[1:] {
 		switch a {
@@ -27,6 +29,8 @@ main :: proc() {
 			force_plain = true
 		case "--identities":
 			identities_only = true
+		case "--scores":
+			scores_only = true
 		}
 	}
 
@@ -42,6 +46,8 @@ main :: proc() {
 	cli_key := ""
 	cli_model := ""
 	cli_timezone := ""
+	cli_decay := 0.0
+	decay_bad := false
 
 	i := 2
 	for i < len(args) {
@@ -57,6 +63,12 @@ main :: proc() {
 			if i + 1 < len(args) { i += 1; cli_key = args[i]; cli_provider = "openrouter" }
 		case a == "--model":
 			if i + 1 < len(args) { i += 1; cli_model = args[i] }
+		case a == "--decay":
+			if i + 1 < len(args) {
+				i += 1
+				d, ok := strconv.parse_f64(args[i])
+				if ok && d >= MIN_DECAY && d <= MAX_DECAY { cli_decay = d } else { decay_bad = true }
+			}
 		case a == "--timezone" || a == "--tz":
 			if i + 1 < len(args) { i += 1; cli_timezone = args[i] }
 		case !strings.has_prefix(a, "-"):
@@ -79,7 +91,16 @@ main :: proc() {
 	}
 	opts.provider, opts.api_key, opts.model = resolve_provider(cfg)
 	opts.timezone = resolve_timezone(cli_timezone, cfg)
+	opts.decay = cli_decay
+	if decay_bad {
+		fmt.eprintfln("--decay needs a number between %.2f and %.1f", MIN_DECAY, MAX_DECAY)
+		os.exit(2)
+	}
 
+	if scores_only {
+		if !run_scores(opts) do os.exit(1)
+		return
+	}
 	if identities_only {
 		if !run_identities(opts) do os.exit(1)
 		return
@@ -150,6 +171,29 @@ run_identities :: proc(opts: Run_Opts) -> bool {
 		fmt.eprintfln("note: could not write %s/%s", SHR_DIR_NAME, IDENTITIES_FILE)
 	}
 	fmt.print(identity_report_text(table))
+	return true
+}
+
+// `--scores`: print the behaviour views and test the memory model against
+// simple baselines on this listener's own history.
+run_scores :: proc(opts: Run_Opts) -> bool {
+	files := find_json_files(opts.data_dir)
+	if len(files) == 0 {
+		fmt.eprintfln("No Streaming_History_Audio_*.json found in %s", opts.data_dir)
+		return false
+	}
+	clock := make_clock(opts.timezone)
+	loaded, ok := load_plays(files[:], &clock, false)
+	if !ok {
+		fmt.eprintfln("Failed to parse %s", loaded.failed_path)
+		return false
+	}
+	// Overrides apply here too, so the scores match the report.
+	if _, err := resolve_identities(loaded.plays[:], opts.data_dir, &loaded.tally); len(err) > 0 {
+		fmt.eprintfln("%s", err)
+		return false
+	}
+	fmt.print(scores_report_text(compute_scores(loaded.plays[:], opts.decay if opts.decay > 0 else DEFAULT_DECAY), evaluate_rankers(loaded.plays[:])))
 	return true
 }
 

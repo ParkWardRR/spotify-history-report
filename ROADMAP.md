@@ -17,7 +17,7 @@ Two rules shape everything below:
    models live in an optional sidecar that communicates through cached files on
    disk. You can delete the sidecar and the tool still works.
 
-Status: **Phases 0 and 1a are implemented** (see its section for what shipped and the
+Status: **Phases 0, 1a and 3 are implemented** (see its section for what shipped and the
 decisions made along the way); Phases 1–7 are planned. Phase numbers are
 dependency order, not a schedule.
 
@@ -299,6 +299,30 @@ favourites, current obsessions and dormant candidates into separate views.
 **Done when:** scores are computed from the corrected ordinals, every score has
 a one-line plain-English explanation in the UI, and the TUI/HTML show
 favourites / obsessions / rediscovery as distinct sections.
+
+### Phase 3 outcome
+
+Implemented in `scores.odin`: ACT-R base-level activation, the five views above
+(each with its definition printed beside it), session opener/closer rates, a
+Habits TUI tab, an HTML section, and `--scores` / `--decay`.
+
+- **The evaluation is part of the feature, and it changed the design.** Run on a
+  synthetic drifting-taste history (800 tracks, three years), the literature's
+  default decay (d=0.5) scored 61.7% precision@20 against 72.5% for plain
+  "most recent" and for d=0.8. So the model is *not* assumed to win: the report
+  shows it beside the baselines, suggests a better decay when one wins by 5+
+  points, and refuses to present a result when the test is uninformative (the
+  fictional sample replays every known track, so all rankers tie at 100%).
+  This is a sanity check on invented data, not evidence about real listeners.
+- **Views are not a partition** (unlike the explore/obsess shares, which are
+  proportions that must sum to 100). A favourite you are bingeing is both.
+- **Rediscoveries need 3+ active months**, otherwise a one-week burst from two
+  years ago would be mistaken for a forgotten favourite.
+- **Deferred:** exploration breadth. It must be a distance between listened
+  tracks, and without audio embeddings the only available proxy is a genre
+  count, which is precisely what the Spotify study argues against. It waits for
+  Phase 4. PISA stays deferred until it beats the interpretable baseline here
+  on held-out sessions.
 
 ---
 

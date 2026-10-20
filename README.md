@@ -52,6 +52,7 @@ That's it. No Python, no npm, no Docker. Just one compiled binary.
 | **Session openers** | The songs you reach for first when you hit play |
 | **Top albums** | Best albums by total listening time |
 | **Never-skipped** | Songs with 15+ plays and zero skips — pure commitment |
+| **Favourites, obsessions, rediscoveries** | Long-term favourites, what you're bingeing now, and old favourites you've forgotten, as separate lists |
 | **Genre evolution** | Stacked area chart of genre share over time (requires LLM) |
 | **Heatmap** | When you listen — day of week × hour of day |
 
@@ -128,6 +129,7 @@ While your data is processed you get a live pipeline view; when it finishes the 
 | **Artists** | Top 25 bars, the lifers, top artists by year |
 | **Library** | Top albums, earworms, session openers, never-skipped |
 | **Rhythm** | Weekday × hour heatmap, year by year, explore vs. obsess |
+| **Habits** | Long-term favourites, current obsessions, rediscoveries, what you're likely to replay, session openers and closers |
 | **Genres** | Genre mix bar and per-genre sparklines over time |
 
 <table>
@@ -141,7 +143,7 @@ While your data is processed you get a live pipeline view; when it finishes the 
   </tr>
 </table>
 
-Keys: `tab` / `←` `→` / `1`–`5` switch tabs · `↑` `↓` `j` `k` / mouse wheel scroll · `o` open the report · `q` quit.
+Keys: `tab` / `←` `→` / `1`–`6` switch tabs · `↑` `↓` `j` `k` / mouse wheel scroll · `o` open the report · `q` quit.
 `--setup` is a TUI too (provider picker, masked key entry with paste support).
 
 ### Theme
@@ -168,6 +170,7 @@ src/
 ├── parser.odin    Spotify JSON deserialization, record → play conversion
 ├── calendar.odin  timestamps → local time (named timezone, true day ordinals)
 ├── identity.odin  track identity: URI resolution, duplicate candidates, overrides
+├── scores.odin    ACT-R activation, favourites/obsessions/rediscoveries, held-out evaluation
 ├── stats.odin     all metric computation (sessions, streaks, heatmap, genre share)
 ├── config.odin    config file (~/.config), provider resolution, genre cache
 ├── llm.odin       LLM genre classification (Anthropic/OpenAI/OpenRouter via curl)
@@ -200,6 +203,28 @@ The HTML template is embedded at compile time via Odin's `#load` directive — t
 Timestamps are converted to a named timezone (DST included) before bucketing, so days, streaks, weekdays and hours match your wall clock. Pick the zone with `--timezone Europe/Berlin`, a `"timezone"` key in the config file, or `$TZ`; the default is `America/Los_Angeles`. It needs the system zoneinfo database; without one the tool falls back to a fixed UTC−8 and says so in the report footer and progress output.
 
 Rankings break ties by name, so the same export always produces the same report. A partial final year or quarter is kept and labelled as partial rather than dropped.
+
+## Listening habits
+
+Instead of one list ranked by lifetime hours, the **Habits** tab (and a section of the HTML report) separates what kind of favourite a track is. Each list shows its own definition:
+
+| View | Definition |
+|:-----|:-----------|
+| **Long-term favourites** | 10+ plays across 6+ different months, and heard within the last 365 days of your history |
+| **Current obsessions** | 5+ plays in the last 14 days of your history |
+| **Rediscoveries** | 8+ plays across 3+ months, but silent for 365+ days; ranked by how well you knew them when they dropped out |
+| **Likely to come back to** | Highest ACT-R activation: a memory model where recent and frequent plays count most and fade as a power law |
+| **Reach-for-first / last song of the night** | Share of a track's plays that opened or closed a session |
+
+The views overlap on purpose (a favourite you are bingeing this week is both). "Now" is the last play in your export, not today's date, so old exports still make sense. The memory model follows [Predicting Music Relistening Behavior Using the ACT-R Framework](https://dl.acm.org/doi/10.1145/3460231.3478846).
+
+**Does the model actually work for you?** Don't take it on faith:
+
+```bash
+./spotify-history-report ~/Downloads/my_spotify_data/ --scores
+```
+
+prints the views, then holds out your most recent months, ranks the tracks you already knew, and reports how many of the top 20 you really replayed, next to "most recent" and "most played" baselines and a random-ranking floor. Which ranking wins depends on the listener: on one synthetic history with drifting taste, plain recency matched the best decay and beat the default. If another decay clearly wins on yours it says so; use it with `--decay 0.8`. If nearly every known track gets replayed (as in the daily-listening sample), the test can't separate the rankers and the output says that instead of showing a tie as a result.
 
 ## Track identity
 

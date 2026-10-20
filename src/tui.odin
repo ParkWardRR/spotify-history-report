@@ -39,6 +39,8 @@ print_usage :: proc() {
 		opt_line("--openrouter-key <key>", "OpenRouter API key", "(any model)"),
 		opt_line("--model <model>", "Override the LLM model"),
 		opt_line("--timezone <name>", "IANA zone for local time (default: $TZ, else America/Los_Angeles)"),
+		opt_line("--decay <d>", "Memory decay for the behaviour scores (default 0.5; try --scores first)"),
+		opt_line("--scores", "Print favourites/obsessions/rediscoveries and test the model on your replays"),
 		opt_line("--identities", "Print the track-identity report (coverage, duplicates) and exit"),
 		opt_line("--plain", "No TUI; print progress as plain lines"),
 		opt_line("--setup", "Interactive config setup", "(saves to ~/.config)"),

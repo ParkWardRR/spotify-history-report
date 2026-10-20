@@ -101,6 +101,7 @@ Stats :: struct {
 	last_year:          int,
 	last_year_partial:  bool,
 	timezone:           string, // description of how local time was derived
+	scores:             Scores,
 	identity:           Identity_Summary,
 	identity_candidates: [dynamic]Candidate, // top review candidates, most-played first
 }

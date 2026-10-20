@@ -41,6 +41,10 @@ cmp -s "$WORK/a.html" "$WORK/c.html" && fail "changing --timezone did not change
 [ -s "$WORK/data/.shr/identities.json" ] || fail "no .shr/identities.json written"
 "$BIN" "$WORK/data" --identities > "$WORK/ids.txt" || fail "--identities failed"
 grep -q "by Spotify URI" "$WORK/ids.txt" || fail "--identities printed no coverage"
+"$BIN" "$WORK/data" --scores > "$WORK/scores.txt" || fail "--scores failed"
+grep -q "Long-term favourites" "$WORK/scores.txt" || fail "--scores printed no views"
+grep -q "Not informative here" "$WORK/scores.txt" || fail "--scores should flag the degenerate sample evaluation"
+"$BIN" "$WORK/data" --scores --decay 9 >/dev/null 2>&1 && fail "--decay 9 should be rejected"
 
 python3 -I - "$WORK/a.html" "$WORK/data/.shr/identities.json" <<'PY'
 import json, re, sys
@@ -56,5 +60,8 @@ assert any(q["partial"] for q in d["genre_area"]) or not d["hours_subtitle"], "p
 ids = json.load(open(sys.argv[2]))
 assert ids["schema_version"] == 1 and ids["summary"]["plays_metadata_only"] == 0, ids["summary"]
 assert d["identity"]["plays_by_uri"] == d["total_plays"], d["identity"]
+sc = d["scores"]
+assert sc["favourites"]["items"] and sc["warm"]["items"], "behaviour views are empty"
+assert all(k in sc["favourites"] for k in ("why", "items")), sc["favourites"].keys()
 print("smoke: ok")
 PY
