@@ -39,6 +39,7 @@ Annotation_Source :: enum {
 	User,
 	Musicbrainz,
 	Sidecar,
+	Lastfm,
 	Llm,
 }
 
@@ -47,6 +48,7 @@ source_name :: proc(s: Annotation_Source) -> string {
 	case .User:        return "user"
 	case .Musicbrainz: return "musicbrainz"
 	case .Sidecar:     return "sidecar"
+	case .Lastfm:      return "lastfm"
 	case .Llm:         return "llm"
 	}
 	return "?"
@@ -168,7 +170,7 @@ parse_annotations :: proc(data: []u8, label: string) -> (f: Annotation_File, err
 		where_ := fmt.aprintf("%s: annotations[%d]", label, i)
 		if len(a.artist) == 0 do return {}, fmt.aprintf("%s: missing artist", where_)
 		if _, ok := parse_source(a.source); !ok {
-			return {}, fmt.aprintf("%s: unknown source \"%s\" (known: user, musicbrainz, sidecar, llm)", where_, a.source)
+			return {}, fmt.aprintf("%s: unknown source \"%s\" (known: user, musicbrainz, sidecar, lastfm, llm)", where_, a.source)
 		}
 		if p := validate_annotation(a.namespace, a.value); len(p) > 0 do return {}, fmt.aprintf("%s: %s", where_, p)
 	}
