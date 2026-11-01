@@ -6,6 +6,7 @@ package spotify_report
 
 import "core:fmt"
 import "core:hash"
+import "core:math"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
@@ -92,6 +93,8 @@ Import_Summary :: struct {
 	techlog_files:    int,    // Technical Log event files that contributed (routes, bitrate, daylists)
 	excluded:         int,    // music rows dropped by exclude_artists
 	exclusions_unmatched: [dynamic]string, // exclude_artists names that matched no row
+	downweighted:     int,    // music rows dropped by downweight rules
+	downweight_unmatched: [dynamic]string, // downweight rules that matched no row
 }
 
 Load_Result :: struct {
@@ -110,10 +113,17 @@ Load_Result :: struct {
 // one file are kept: those can be real replays.
 //
 // Rows by an `exclude` artist are dropped here, before the tally, the sessions
-// and the plays are built, so they leave no trace in any metric.
-load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclude: []string = nil) -> (r: Load_Result, ok: bool) {
+// and the plays are built, so they leave no trace in any metric. `downweight`
+// rules drop their share of matching rows at the same point.
+load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclude: []string = nil, downweight: []Downweight_Rule = nil) -> (r: Load_Result, ok: bool) {
 	exclude_hits: map[string]int // not temp: the pipeline frees temp between files
 	defer delete(exclude_hits)
+	rule_hits := make([]int, len(downweight))
+	defer delete(rule_hits)
+	cutoffs := downweight_cutoffs(entries, clock, exclude, downweight)
+	defer delete(cutoffs)
+	ties_taken := make([]int, len(downweight))
+	defer delete(ties_taken)
 	for name in exclude do exclude_hits[name] = 0
 	seen_files: map[u64]bool
 	seen_rows: map[u64]int // row fingerprint → index of the file it first appeared in
@@ -182,6 +192,16 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 				r.summary.excluded += 1
 				continue
 			}
+			if ri := downweight_rule_for(downweight, play.artist, play.track); ri >= 0 {
+				rule_hits[ri] += 1
+				h, c := downweight_hash(play.ts_raw, play.artist, play.track, play.ms), cutoffs[ri]
+				tie := h == c.hash && qualifies(play) && ties_taken[ri] < c.ties
+				if tie do ties_taken[ri] += 1
+				if h < c.hash || tie {
+					r.summary.downweighted += 1
+					continue
+				}
+			}
 			r.summary.music_events += 1
 			tally_record(&r.tally, play.year, play_key(play), play.skipped, play.ms)
 			slot := -1
@@ -199,6 +219,9 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 	r.summary.plays = len(r.plays)
 	for name in exclude { // listed order, so the report never depends on map order
 		if exclude_hits[name] == 0 do append(&r.summary.exclusions_unmatched, name)
+	}
+	for rule, i in downweight {
+		if rule_hits[i] == 0 do append(&r.summary.downweight_unmatched, downweight_label(rule))
 	}
 
 	if r.summary.files_used == 0 {
@@ -218,6 +241,103 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 	}
 	sort_plays(r.plays[:])
 	return r, true
+}
+
+// The rule that governs a row, or -1. A track rule beats an artist rule, so a
+// song can be turned down more (or less) than the rest of its artist.
+downweight_rule_for :: proc(rules: []Downweight_Rule, artist, track: string) -> int {
+	by_artist := -1
+	for rule, i in rules {
+		if len(rule.track) > 0 {
+			if rule.track == track && (len(rule.artist) == 0 || rule.artist == artist) do return i
+		} else if rule.artist == artist && by_artist < 0 {
+			by_artist = i
+		}
+	}
+	return by_artist
+}
+
+// A row's position in its rule's drop order: MurmurHash3's finalizer over
+// FNV-1a 64 of "ts␟artist␟track␟ms". A hash, not a random draw, so every run
+// (and the preview in tools/tuner) drops the same rows, spread evenly over the
+// years. The finalizer matters: FNV alone clusters near-identical rows.
+downweight_hash :: proc(ts, artist, track: string, ms: i64) -> u64 {
+	buf: [4096]u8 // no allocation: this runs twice per matched row
+	key := fmt.bprintf(buf[:], "%s\x1f%s\x1f%s\x1f%d", ts, artist, track, ms)
+	h := hash.fnv64a(transmute([]u8)key)
+	h ~= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ~= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ~= h >> 33
+	return h
+}
+
+// A rule removes exactly round(remove × its plays): the plays (30 s or more)
+// with the lowest hashes. Short listens below the same cutoff go too, so skips
+// shrink in step. That needs every rule's plays up front, so this reads the
+// files once before the load, skipping what the load skips (other files,
+// identical copies, overlap repeats, excluded artists). A row is dropped when
+// its hash is below its rule's cutoff; at the cutoff itself only `ties` plays
+// go. Those are exact duplicates (Apple Music's daily counts expand to identical
+// rows), so which of them goes changes nothing.
+Downweight_Cutoff :: struct {
+	hash: u64,
+	ties: int, // plays with exactly this hash that are dropped
+}
+
+downweight_cutoffs :: proc(entries: []Input_Entry, clock: ^Clock, exclude: []string, rules: []Downweight_Rule) -> []Downweight_Cutoff {
+	cutoffs := make([]Downweight_Cutoff, len(rules))
+	if len(rules) == 0 do return cutoffs
+	pools := make([][dynamic]u64, len(rules))
+	defer { for &p in pools do delete(p); delete(pools) }
+	excluded: map[string]bool
+	defer delete(excluded)
+	for name in exclude do excluded[name] = true
+	seen_files: map[u64]bool
+	seen_rows: map[u64]int
+	defer { delete(seen_files); delete(seen_rows) }
+
+	for e, fi in entries {
+		data, rerr := read_input(e)
+		if len(rerr) > 0 do continue // the load reports it
+		fp := file_fingerprint(data)
+		kind, records := classify_file(e.name, data)
+		delete(data)
+		if kind != .Streaming_History || fp in seen_files {
+			delete(records)
+			continue
+		}
+		seen_files[fp] = true
+		for &rec in records {
+			play, status := record_to_play(rec, clock)
+			if status != .Ok do continue
+			row := row_fingerprint(rec)
+			if first, dup := seen_rows[row]; dup && first != fi do continue
+			seen_rows[row] = fi
+			if play.artist in excluded do continue
+			if ri := downweight_rule_for(rules, play.artist, play.track); ri >= 0 && qualifies(play) {
+				append(&pools[ri], downweight_hash(play.ts_raw, play.artist, play.track, play.ms))
+			}
+		}
+		delete(records)
+	}
+	for &pool, i in pools {
+		k := min(int(math.round(rules[i].remove * f64(len(pool)))), len(pool))
+		if k == 0 do continue // {0, 0} drops nothing
+		slice.sort(pool[:])
+		last := pool[k - 1] // the k-th lowest is the last one dropped
+		below := 0
+		for below < k && pool[below] < last do below += 1
+		cutoffs[i] = {last, k - below}
+	}
+	return cutoffs
+}
+
+downweight_label :: proc(rule: Downweight_Rule) -> string {
+	if len(rule.track) == 0 do return rule.artist
+	if len(rule.artist) == 0 do return fmt.aprintf("\"%s\"", rule.track)
+	return fmt.aprintf("\"%s\" by %s", rule.track, rule.artist)
 }
 
 // Identity of a row for overlap detection: when it ended, what it was and for
@@ -298,7 +418,7 @@ run_pipeline :: proc(o: Run_Opts) {
 	}
 	clock := make_clock(o.timezone)
 	stage_msg(.Load, .Active, "", 0, len(scan.entries))
-	loaded, ok := load_plays(scan.entries[:], &clock, true, ov.exclude_artists[:])
+	loaded, ok := load_plays(scan.entries[:], &clock, true, ov.exclude_artists[:], ov.downweight[:])
 	if !ok {
 		fail(.Load, loaded.err, loaded.hint)
 		return
@@ -473,6 +593,10 @@ exclusion_note :: proc(s: Import_Summary) -> string {
 	if s.excluded > 0 do append(&parts, fmt.aprintf("%s rows excluded by exclude_artists", fmt_int(s.excluded)))
 	if len(s.exclusions_unmatched) > 0 {
 		append(&parts, fmt.aprintf("exclude_artists matched nothing for %s", strings.join(s.exclusions_unmatched[:], ", ", context.temp_allocator)))
+	}
+	if s.downweighted > 0 do append(&parts, fmt.aprintf("%s rows dropped by downweight", fmt_int(s.downweighted)))
+	if len(s.downweight_unmatched) > 0 {
+		append(&parts, fmt.aprintf("downweight matched nothing for %s", strings.join(s.downweight_unmatched[:], ", ", context.temp_allocator)))
 	}
 	return strings.join(parts[:], " · ")
 }

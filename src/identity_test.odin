@@ -380,3 +380,23 @@ test_exclude_artists_parses_and_rejects_mistakes :: proc(t: ^testing.T) {
 	_, err = parse_ov(`{"exclude_artist":["A"]}`) // typo for exclude_artists
 	testing.expect(t, len(err) > 0 && contains(err, "unknown key"))
 }
+
+@(test)
+test_downweight_parses_and_rejects_mistakes :: proc(t: ^testing.T) {
+	ov, err := parse_ov(`{"version":1,"downweight":[{"artist":"A","remove":0.3},{"artist":"B","track":"T","remove":1}]}`)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(ov.downweight), 2)
+	testing.expect_value(t, ov.downweight[0].remove, 0.3)
+	testing.expect_value(t, ov.downweight[1].track, "T")
+
+	_, err = parse_ov(`{"downweight":{"artist":"A"}}`)
+	testing.expect(t, contains(err, "must be a list"), err)
+	_, err = parse_ov(`{"downweight":[{"remove":0.3}]}`)
+	testing.expect(t, contains(err, "needs an \"artist\""), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"A","remove":0}]}`)
+	testing.expect(t, contains(err, "above 0"), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"A","remove":30}]}`) // percent, not share
+	testing.expect(t, contains(err, "at most 1"), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"A","share":0.3}]}`)
+	testing.expect(t, contains(err, "unknown key"), err)
+}

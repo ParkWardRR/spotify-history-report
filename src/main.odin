@@ -247,7 +247,7 @@ load_input :: proc(opts: ^Run_Opts, progress: bool) -> (Load_Result, Overrides, 
 		return {}, {}, false
 	}
 	clock := make_clock(opts.timezone)
-	loaded, ok := load_plays(scan.entries[:], &clock, progress, ov.exclude_artists[:])
+	loaded, ok := load_plays(scan.entries[:], &clock, progress, ov.exclude_artists[:], ov.downweight[:])
 	if !ok {
 		fmt.eprintfln("%s\n%s", loaded.err, loaded.hint)
 		return loaded, ov, false

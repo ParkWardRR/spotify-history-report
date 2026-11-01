@@ -295,6 +295,17 @@ A reference is either a `uri` (exactly that URI) or both `artist` and `title` (e
 
 Names are exact and case-sensitive. The import line says how many rows were removed, and names that matched nothing (usually a typo) are listed. Remove the entry to get the data back; the export is never modified.
 
+**One artist or song drowning out the rest?** `downweight` removes a share of their plays instead of all of them:
+
+```json
+{ "downweight": [
+    {"artist": "Artist A", "remove": 0.3},
+    {"artist": "Artist B", "track": "One Song", "remove": 0.3333}
+] }
+```
+
+`remove` is a share (0.3 drops 30%), and the count is exact: round(share × plays). The dropped plays are picked by a hash of each row, so they spread evenly over the years and the same ones go on every run; short listens and skips by the same artist shrink in step. A rule with `track` covers that song (by `artist` too when given) and beats an artist rule for it. [`tools/tuner`](tools/tuner) edits these rules with sliders and a live preview of the top artists and songs.
+
 MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 
 ## Genre classification

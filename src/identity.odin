@@ -401,6 +401,18 @@ Overrides :: struct {
 	// shared account where some listening belongs to someone else). Exact,
 	// case-sensitive names, like the rest of the overrides.
 	exclude_artists: [dynamic]string,
+	// Each rule drops a share of an artist's (or one track's) rows, spread
+	// evenly over time, so one dominant name stops crowding out the rest.
+	downweight: [dynamic]Downweight_Rule,
+}
+
+// `remove` is the share dropped, 0 < remove <= 1. A rule with `track` matches
+// that title (by `artist` too when given); without `track` it matches every row
+// by `artist`. A track rule wins over an artist rule for the same row.
+Downweight_Rule :: struct {
+	artist: string,
+	track:  string,
+	remove: f64,
 }
 
 // Reads `.shr/overrides.json`. A missing file is fine (nothing overridden); a
@@ -418,7 +430,7 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 	val, perr := json.parse(data, allocator = context.temp_allocator)
 	if perr != nil do return {}, fmt.aprintf("%s is not valid JSON (%v)", label, perr)
 
-	if e := check_keys(val, {"version", "merges", "keep_separate", "annotations", "exclude_artists"}, label); len(e) > 0 do return {}, e
+	if e := check_keys(val, {"version", "merges", "keep_separate", "annotations", "exclude_artists", "downweight"}, label); len(e) > 0 do return {}, e
 	root := val.(json.Object)
 
 	check_list :: proc(root: json.Object, field: string, pair: [2]string, label: string) -> string {
@@ -457,6 +469,26 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 			name, is_str := item.(json.String)
 			if !is_str || len(name) == 0 {
 				return {}, fmt.aprintf("%s: exclude_artists[%d] must be a non-empty artist name", label, i)
+			}
+		}
+	}
+
+	if raw, present := root["downweight"]; present {
+		arr, is_arr := raw.(json.Array)
+		if !is_arr do return {}, fmt.aprintf("%s: \"downweight\" must be a list", label)
+		for item, i in arr {
+			where_ := fmt.aprintf("%s: downweight[%d]", label, i)
+			if e := check_keys(item, {"artist", "track", "remove"}, where_); len(e) > 0 do return {}, e
+			obj := item.(json.Object)
+			artist, _ := obj["artist"].(json.String)
+			track, _ := obj["track"].(json.String)
+			if len(artist) == 0 && len(track) == 0 do return {}, fmt.aprintf("%s: needs an \"artist\", a \"track\" or both", where_)
+			share, is_num := obj["remove"].(json.Float)
+			if n, is_int := obj["remove"].(json.Integer); is_int {
+				share, is_num = f64(n), true
+			}
+			if !is_num || share <= 0 || share > 1 {
+				return {}, fmt.aprintf("%s: \"remove\" must be a share above 0 and at most 1 (0.3 drops 30%%)", where_)
 			}
 		}
 	}

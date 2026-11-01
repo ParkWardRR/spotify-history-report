@@ -279,3 +279,73 @@ test_exclusions_hold_across_several_files :: proc(t: ^testing.T) {
 	testing.expect_value(t, r.summary.excluded, 2)
 	testing.expect_value(t, len(r.summary.exclusions_unmatched), 0)
 }
+
+// n plays a minute apart by `artist`, all titled `track`.
+rows_by :: proc(artist, track: string, n: int, start_minute := 0) -> string {
+	parts: [dynamic]string
+	for i in 0..<n {
+		m := start_minute + i
+		append(&parts, fmt.tprintf(`{{"ts":"2023-05-%02dT%02d:%02d:00Z","ms_played":200000,"master_metadata_track_name":"%s","master_metadata_album_artist_name":"%s","master_metadata_album_album_name":"Album"}}`, 1 + m / 1440, (m / 60) % 24, m % 60, track, artist))
+	}
+	return strings.join(parts[:], ",", context.temp_allocator)
+}
+
+@(test)
+test_downweight_drops_about_the_share_asked_for :: proc(t: ^testing.T) {
+	dir := fixture_dir("downweight")
+	body := fmt.tprintf("[%s,%s,%s]", rows_by("Big", "Hit", 1000), rows_by("Big", "Deep Cut", 1000, 1000), rows_by("Small", "Song", 200, 2000))
+	write_fixture(dir, "Streaming_History_Audio_2023.json", body)
+	scan := scan_inputs({dir})
+	c := make_clock("UTC")
+
+	rules := []Downweight_Rule{
+		{artist = "Big", remove = 0.3},
+		{artist = "Big", track = "Hit", remove = 0.5}, // the track rule wins for Hit
+		{artist = "Nobody", remove = 0.5},
+	}
+	r, ok := load_plays(scan.entries[:], &c, false, nil, rules)
+	testing.expect(t, ok, r.err)
+	count :: proc(plays: []Play, track: string) -> (n: int) {
+		for p in plays do if p.track == track do n += 1
+		return
+	}
+	hit, deep, small := count(r.plays[:], "Hit"), count(r.plays[:], "Deep Cut"), count(r.plays[:], "Song")
+	testing.expect_value(t, hit, 500)
+	testing.expect_value(t, deep, 700)
+	testing.expect_value(t, small, 200)
+	testing.expect_value(t, r.summary.downweighted, 2000 - hit - deep)
+	testing.expect_value(t, len(r.summary.downweight_unmatched), 1)
+	testing.expect_value(t, r.summary.downweight_unmatched[0], "Nobody")
+
+	// Same input, same rows dropped.
+	r2, _ := load_plays(scan.entries[:], &c, false, nil, rules)
+	testing.expect_value(t, r2.summary.downweighted, r.summary.downweighted)
+	testing.expect_value(t, count(r2.plays[:], "Hit"), hit)
+
+	// A track rule without an artist matches that title by anyone; remove 1 drops all.
+	r3, _ := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{track = "Song", remove = 1}})
+	testing.expect_value(t, count(r3.plays[:], "Song"), 0)
+	testing.expect_value(t, len(r3.plays), 2000)
+}
+
+@(test)
+test_downweight_matches_the_tuner_hash :: proc(t: ^testing.T) {
+	// tools/tuner/main_test.go pins the same hashes; both sides must agree.
+	testing.expect_value(t, downweight_hash("2018-07-01T12:00:00Z", "Tyga", "Taste (feat. Offset)", 187000), u64(12424613125852909923))
+	testing.expect_value(t, downweight_hash("2019-01-02T03:04:05Z", "Kanye West", "Stronger", 311000), u64(17775851159619508905))
+	testing.expect_value(t, downweight_hash("2012-02-03T04:05:06Z", "JAY-Z", "Gotta Have It", 140000), u64(1095902694580450456))
+}
+
+@(test)
+test_downweight_is_exact_on_duplicate_rows :: proc(t: ^testing.T) {
+	dir := fixture_dir("downweight_dup")
+	rec := `{"ts":"2018-03-04T09:00:00Z","platform":"Apple Music","ms_played":200000,"master_metadata_track_name":"T","master_metadata_album_artist_name":"A"}`
+	write_fixture(dir, "Apple_Music_2018.json", fmt.tprintf("[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s]", rec, rec, rec, rec, rec, rec, rec, rec, rec, rec))
+	scan := scan_inputs({dir})
+	c := make_clock("UTC")
+	r, ok := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{artist = "A", remove = 0.3}})
+	testing.expect(t, ok, r.err)
+	testing.expect_value(t, len(r.plays), 7)
+	r2, _ := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{artist = "A", remove = 0.5}, {artist = "Z", remove = 1}})
+	testing.expect_value(t, len(r2.plays), 5)
+}
