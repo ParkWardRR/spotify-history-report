@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downweight tuner</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #f5f5f7; --surface: #fff; --ink: #1d1d1f; --ink2: #6e6e73; --muted: #8e8e93;
+    --grid: #e5e5ea; --accent: #0071e3; --ghost: #d2e3fa; --up: #248a3d; --down: #d70015;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --page: #000; --surface: #1c1c1e; --ink: #f5f5f7; --ink2: #aeaeb2; --muted: #8e8e93;
+      --grid: #38383a; --accent: #0a84ff; --ghost: #1f3a5c; --up: #30d158; --down: #ff453a; }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 14px/1.4 system-ui, -apple-system, sans-serif; background: var(--page); color: var(--ink); }
+  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 24px; background: color-mix(in srgb, var(--page) 85%, transparent); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--grid); }
+  h1 { font-size: 17px; font-weight: 600; }
+  .file { font-size: 12px; color: var(--muted); }
+  .totals { margin-left: auto; font-size: 13px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .totals b { color: var(--ink); }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: var(--grid); color: var(--ink); }
+  button.primary { background: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  #status { font-size: 12px; color: var(--ink2); min-width: 60px; }
+  main { display: grid; grid-template-columns: 420px 1fr; gap: 20px; padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border-radius: 12px; padding: 16px 18px; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+  .rule { padding: 12px 0; border-top: 1px solid var(--grid); }
+  .rule:first-of-type { border-top: 0; padding-top: 0; }
+  .rule-head { display: flex; align-items: baseline; gap: 8px; }
+  .rule-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rule-kind { font-size: 11px; color: var(--muted); }
+  .x { background: none; color: var(--muted); padding: 0 4px; font-size: 16px; }
+  .slider-row { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  input[type=number] { width: 72px; font: inherit; padding: 4px 6px; border: 1px solid var(--grid); border-radius: 6px;
+    background: var(--page); color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+  .pct { color: var(--ink2); }
+  .rule-stat { font-size: 12px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .add { display: flex; gap: 8px; margin-top: 14px; }
+  .add input { flex: 1; font: inherit; padding: 7px 10px; border: 1px solid var(--grid); border-radius: 8px; background: var(--page); color: var(--ink); }
+  .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 1300px) { .lists { grid-template-columns: 1fr; } }
+  .item { display: grid; grid-template-columns: 26px 38px 1fr 92px; align-items: center; gap: 6px; padding: 4px 0; font-variant-numeric: tabular-nums; }
+  .rank { color: var(--muted); text-align: right; }
+  .delta { font-size: 11px; font-weight: 600; text-align: center; }
+  .delta.up { color: var(--up); } .delta.down { color: var(--down); } .delta.new { color: var(--accent); }
+  .label { min-width: 0; }
+  .label div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label .by { font-size: 11px; color: var(--muted); }
+  .bar { position: relative; height: 4px; margin-top: 3px; border-radius: 2px; background: var(--ghost); }
+  .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--accent); }
+  .val { text-align: right; font-size: 12px; }
+  .val s { color: var(--muted); text-decoration: none; display: block; font-size: 11px; }
+  .item.hit .label div:first-child { color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Downweight tuner</h1><div class="file" id="file"></div></div>
+  <div class="totals" id="totals"></div>
+  <button id="revert" disabled>Revert</button>
+  <button id="save" class="primary" disabled>Save</button>
+  <span id="status"></span>
+</header>
+<main>
+  <section class="card">
+    <h2>Rules — share of plays removed</h2>
+    <div id="rules"></div>
+    <div class="add">
+      <input id="pick" list="cands" placeholder="Add an artist or song…" autocomplete="off">
+      <datalist id="cands"></datalist>
+      <button id="add">Add</button>
+    </div>
+    <p class="hint">Drops are spread evenly over the years, and the same rows drop every run. A song rule overrides its artist's rule for that song. Save writes <code>downweight</code> into overrides.json; the next report run applies it.</p>
+  </section>
+  <section class="lists">
+    <div class="card"><h2>Top artists · hours</h2><div id="artists"></div></div>
+    <div class="card"><h2>Top songs · plays</h2><div id="tracks"></div></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => n.toLocaleString(undefined, {maximumFractionDigits: 1});
+let rules = [], saved = '[]', pickMap = new Map(), timer = 0, seq = 0;
+
+const ruleName = r => r.track ? r.track : r.artist;
+const ruleKind = r => r.track ? (r.artist ? `song · ${r.artist}` : 'song · any artist') : 'artist';
+const dirty = () => JSON.stringify(rules) !== saved;
+
+function statText(st) {
+  if (!st) return "…";
+  return st.matched ? `drops ${fmt(st.dropped)} of ${fmt(st.matched)} plays · ${fmt(st.hours_before)} → ${fmt(st.hours_after)} h` : "matches nothing — check the spelling";
+}
+
+// Builds the rule controls; previews only update their stat lines, so a slider
+// being dragged is never replaced under the pointer.
+function renderRules() {
+  $("rules").innerHTML = rules.length ? "" : `<p class="hint">No rules yet.</p>`;
+  rules.forEach((r, i) => {
+    const pct = +(r.remove * 100).toFixed(1);
+    const el = document.createElement('div');
+    el.className = 'rule';
+    el.innerHTML = `<div class="rule-head"><span class="rule-name" title="${esc(ruleName(r))}">${esc(ruleName(r))}</span>
+        <span class="rule-kind">${esc(ruleKind(r))}</span><button class="x" title="Remove rule">×</button></div>
+      <div class="slider-row"><input type="range" min="0.5" max="100" step="0.5" value="${pct}">
+        <input type="number" min="0.1" max="100" step="0.1" value="${pct}"><span class="pct">%</span></div>
+      <div class="rule-stat">…</div>`;
+    const [range, num] = el.querySelectorAll('input');
+    const set = v => { v = Math.min(100, Math.max(0.1, +v || 0.1)); r.remove = Math.round(v * 10) / 1000; range.value = v; num.value = v; changed(); };
+    range.oninput = () => set(range.value);
+    num.onchange = () => set(num.value);
+    el.querySelector('.x').onclick = () => { rules.splice(i, 1); changed(true); };
+    $('rules').appendChild(el);
+  });
+}
+
+function delta(it) {
+  if (!it.rank_before) return '<span class="delta new">new</span>';
+  const d = it.rank_before - it.rank;
+  if (d > 0) return `<span class="delta up">↑${d}</span>`;
+  if (d < 0) return `<span class="delta down">↓${-d}</span>`;
+  return '<span class="delta"></span>';
+}
+
+function renderList(id, items, key, unit) {
+  const max = Math.max(...items.map(x => Math.max(x[key], x[key + '_before'])), 1);
+  const hit = it => rules.some(r => r.track ? (r.track === it.name && (!r.artist || r.artist === it.artist)) : (it.artist ? r.artist === it.artist : r.artist === it.name));
+  $(id).innerHTML = items.map(it => {
+    const now = it[key], was = it[key + '_before'];
+    return `<div class="item${hit(it) ? ' hit' : ''}"><span class="rank">${it.rank}</span>${delta(it)}
+      <div class="label"><div>${esc(it.name)}</div>${it.artist ? `<div class="by">${esc(it.artist)}</div>` : ''}
+        <div class="bar" style="width:${(was / max * 100).toFixed(2)}%"><i style="width:${(now / was * 100).toFixed(2)}%"></i></div></div>
+      <div class="val">${fmt(now)}${unit}${now !== was ? `<s>was ${fmt(was)}</s>` : ''}</div></div>`;
+  }).join('');
+}
+
+async function refresh() {
+  const my = ++seq;
+  const res = await fetch('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rules})});
+  if (my !== seq) return;
+  if (!res.ok) { $('status').textContent = await res.text(); return; }
+  const p = await res.json();
+  document.querySelectorAll(".rule-stat").forEach((el, i) => { el.textContent = statText(p.rules[i]); });
+  renderList('artists', p.artists, 'hours', ' h');
+  renderList('tracks', p.tracks, 'plays', '');
+  $('totals').innerHTML = `<b>${fmt(p.plays)}</b> of ${fmt(p.plays_before)} plays · <b>${fmt(p.hours)}</b> of ${fmt(p.hours_before)} h`;
+}
+
+function changed(rerender) {
+  $('save').disabled = $('revert').disabled = !dirty();
+  $('status').textContent = dirty() ? 'Unsaved' : '';
+  if (rerender) renderRules();
+  clearTimeout(timer);
+  timer = setTimeout(refresh, 120);
+}
+
+$('add').onclick = () => {
+  const r = pickMap.get($('pick').value);
+  if (!r) { $('status').textContent = 'Pick a name from the list'; return; }
+  if (rules.some(x => x.artist === r.artist && (x.track || '') === (r.track || ''))) { $('status').textContent = 'Already a rule'; return; }
+  rules.push({...r, remove: 0.1});
+  $('pick').value = '';
+  changed(true);
+};
+$('pick').onkeydown = e => { if (e.key === 'Enter') $('add').click(); };
+$('revert').onclick = () => { rules = JSON.parse(saved); changed(true); };
+$('save').onclick = async () => {
+  $('save').disabled = true;
+  const res = await fetch('/api/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rules})});
+  if (!res.ok) { $('status').textContent = await res.text(); $('save').disabled = false; return; }
+  saved = JSON.stringify(rules);
+  changed();
+  $('status').textContent = 'Saved ✓';
+};
+window.onbeforeunload = e => { if (dirty()) e.preventDefault(); };
+
+(async () => {
+  const st = await (await fetch('/api/state')).json();
+  rules = st.rules.map(r => ({artist: r.artist || '', track: r.track || '', remove: r.remove}));
+  rules.forEach(r => { if (!r.track) delete r.track; if (!r.artist) delete r.artist; });
+  saved = JSON.stringify(rules);
+  $('file').textContent = st.file;
+  const opts = [];
+  st.artists.forEach(a => { const k = `Artist: ${a.name}  (${fmt(a.hours)} h)`; pickMap.set(k, {artist: a.name}); opts.push(k); });
+  st.tracks.forEach(t => { const k = `Song: ${t.name} — ${t.artist}  (${fmt(t.plays)} plays)`; pickMap.set(k, {artist: t.artist, track: t.name}); opts.push(k); });
+  $('cands').innerHTML = opts.map(o => `<option value="${esc(o)}">`).join('');
+  changed(true);
+})();
+</script>
+</body>
+</html>
