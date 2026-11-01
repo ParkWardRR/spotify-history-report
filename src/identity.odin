@@ -406,12 +406,17 @@ Overrides :: struct {
 	downweight: [dynamic]Downweight_Rule,
 }
 
-// `remove` is the share dropped, 0 < remove <= 1. A rule with `track` matches
-// that title (by `artist` too when given); without `track` it matches every row
-// by `artist`. A track rule wins over an artist rule for the same row.
+// `remove` is the share dropped, 0 < remove <= 1. Every field that is set must
+// match: `artist`, `track` and `album` exactly, `from`/`to` as an inclusive
+// window of "YYYY", "YYYY-MM" or "YYYY-MM-DD" against the export's UTC
+// timestamp. When several rules match a row the most specific wins (track,
+// then album, then artist, then a window), and on a tie the one listed first.
 Downweight_Rule :: struct {
 	artist: string,
 	track:  string,
+	album:  string,
+	from:   string,
+	to:     string,
 	remove: f64,
 }
 
@@ -478,13 +483,30 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 		if !is_arr do return {}, fmt.aprintf("%s: \"downweight\" must be a list", label)
 		for item, i in arr {
 			where_ := fmt.aprintf("%s: downweight[%d]", label, i)
-			if e := check_keys(item, {"artist", "track", "remove"}, where_); len(e) > 0 do return {}, e
+			if e := check_keys(item, {"artist", "track", "album", "from", "to", "remove"}, where_); len(e) > 0 do return {}, e
 			obj := item.(json.Object)
-			artist, _ := obj["artist"].(json.String)
-			track, _ := obj["track"].(json.String)
-			if len(artist) == 0 && len(track) == 0 do return {}, fmt.aprintf("%s: needs an \"artist\", a \"track\" or both", where_)
-			share, is_num := obj["remove"].(json.Float)
-			if n, is_int := obj["remove"].(json.Integer); is_int {
+			named := false
+			for field in ([]string{"artist", "track", "album", "from", "to"}) {
+				v, present := obj[field]
+				if !present do continue
+				str, is_str := v.(json.String)
+				if !is_str || len(str) == 0 do return {}, fmt.aprintf("%s: \"%s\" must be a non-empty string", where_, field)
+				if (field == "from" || field == "to") && !is_date_prefix(str) {
+					return {}, fmt.aprintf("%s: \"%s\" must be YYYY, YYYY-MM or YYYY-MM-DD", where_, field)
+				}
+				named = true
+			}
+			if !named do return {}, fmt.aprintf("%s: needs an \"artist\", \"track\", \"album\" or a date window", where_)
+			from_v, to_v := obj["from"], obj["to"] // missing keys give a nil Value
+			f, _ := from_v.(json.String)
+			t, _ := to_v.(json.String)
+			if len(f) > 0 && len(t) > 0 {
+				n := min(len(f), len(t))
+				if f[:n] > t[:n] do return {}, fmt.aprintf("%s: \"from\" is after \"to\"", where_)
+			}
+			remove_v := obj["remove"]
+			share, is_num := remove_v.(json.Float)
+			if n, is_int := remove_v.(json.Integer); is_int {
 				share, is_num = f64(n), true
 			}
 			if !is_num || share <= 0 || share > 1 {
@@ -504,6 +526,18 @@ parse_overrides :: proc(data: []u8, label: string) -> (ov: Overrides, err: strin
 		return {}, fmt.aprintf("%s: unsupported version %d (this build reads version 1)", label, ov.version)
 	}
 	return ov, ""
+}
+
+is_date_prefix :: proc(s: string) -> bool {
+	if len(s) != 4 && len(s) != 7 && len(s) != 10 do return false
+	for c, i in s {
+		if i == 4 || i == 7 {
+			if c != '-' do return false
+		} else if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Rejects objects with keys outside `allowed`, so a typo such as "merge" can't

@@ -300,11 +300,17 @@ Names are exact and case-sensitive. The import line says how many rows were remo
 ```json
 { "downweight": [
     {"artist": "Artist A", "remove": 0.3},
-    {"artist": "Artist B", "track": "One Song", "remove": 0.3333}
+    {"artist": "Artist B", "track": "One Song", "remove": 0.3333},
+    {"artist": "Artist C", "album": "One Album", "remove": 0.5},
+    {"artist": "Artist D", "from": "2018", "to": "2018-06", "remove": 0.4}
 ] }
 ```
 
-`remove` is a share (0.3 drops 30%), and the count is exact: round(share × plays). The dropped plays are picked by a hash of each row, so they spread evenly over the years and the same ones go on every run; short listens and skips by the same artist shrink in step. A rule with `track` covers that song (by `artist` too when given) and beats an artist rule for it. [`tools/tuner`](tools/tuner) edits these rules with sliders and a live preview of the top artists and songs.
+`remove` is a share (0.3 drops 30%), and the count is exact: round(share × plays). The dropped plays are picked by a hash of each row, so they spread evenly over the years and the same ones go on every run; short listens and skips by the same artist shrink in step.
+
+Every field a rule sets must match: `artist`, `track` and `album` exactly, `from`/`to` as an inclusive window (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`, against the export's UTC timestamps; either end can be left open). A rule with only a window covers everything in it. When several rules match a play, the most specific one alone applies: a song rule beats an album rule, which beats an artist rule, and a window makes a rule more specific than the same rule without one. On a tie the rule listed first wins. Rules that match nothing are named on the import line.
+
+[`tools/tuner`](tools/tuner) edits these rules with a slider on every top artist, song, album and year, and a live preview of the result.
 
 MusicBrainz and AcoustID lookups are planned (see the [roadmap](ROADMAP.md)).
 

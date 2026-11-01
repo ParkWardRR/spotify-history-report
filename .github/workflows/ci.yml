@@ -39,6 +39,9 @@ jobs:
       - name: Test
         run: odin test src -define:ODIN_TEST_TRACK_MEMORY=false
 
+      - name: Test the optimized build
+        run: odin test src -o:speed -define:ODIN_TEST_TRACK_MEMORY=false
+
       - name: Smoke test on the sample export
         run: scripts/smoke.sh ./spotify-history-report
 

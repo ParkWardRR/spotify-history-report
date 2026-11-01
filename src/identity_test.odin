@@ -399,4 +399,22 @@ test_downweight_parses_and_rejects_mistakes :: proc(t: ^testing.T) {
 	testing.expect(t, contains(err, "at most 1"), err)
 	_, err = parse_ov(`{"downweight":[{"artist":"A","share":0.3}]}`)
 	testing.expect(t, contains(err, "unknown key"), err)
+
+	ov, err = parse_ov(`{"downweight":[{"album":"LP","from":"2018","to":"2019-06-30","remove":0.5},{"from":"2020-01","remove":0.1}]}`)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, ov.downweight[0].album, "LP")
+	testing.expect_value(t, ov.downweight[0].to, "2019-06-30")
+	_, err = parse_ov(`{"downweight":[{"artist":"A","from":"18","remove":0.5}]}`)
+	testing.expect(t, contains(err, "YYYY"), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"A","from":"2019","to":"2018-12","remove":0.5}]}`)
+	testing.expect(t, contains(err, "after"), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"","remove":0.5}]}`)
+	testing.expect(t, contains(err, "non-empty"), err)
+	_, err = parse_ov(`{"downweight":[{"artist":"A"}]}`) // no share at all
+	testing.expect(t, contains(err, "above 0"), err)
+	// No dates and no album: the shape most rules have. Run the suite with
+	// -o:speed too; a missing key once only crashed the optimized build.
+	ov, err = parse_ov(`{"downweight":[{"artist":"Kanye West","remove":0.3},{"artist":"Tyga","track":"Taste","remove":0.1}]}`)
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(ov.downweight), 2)
 }

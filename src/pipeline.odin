@@ -192,7 +192,7 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 				r.summary.excluded += 1
 				continue
 			}
-			if ri := downweight_rule_for(downweight, play.artist, play.track); ri >= 0 {
+			if ri := downweight_rule_for(downweight, play); ri >= 0 {
 				rule_hits[ri] += 1
 				h, c := downweight_hash(play.ts_raw, play.artist, play.track, play.ms), cutoffs[ri]
 				tie := h == c.hash && qualifies(play) && ties_taken[ri] < c.ties
@@ -243,18 +243,25 @@ load_plays :: proc(entries: []Input_Entry, clock: ^Clock, progress: bool, exclud
 	return r, true
 }
 
-// The rule that governs a row, or -1. A track rule beats an artist rule, so a
-// song can be turned down more (or less) than the rest of its artist.
-downweight_rule_for :: proc(rules: []Downweight_Rule, artist, track: string) -> int {
-	by_artist := -1
+// The rule that governs a row, or -1: the most specific match (see
+// Downweight_Rule), the first listed on a tie. Mirrored by ruleFor in
+// tools/tuner.
+downweight_rule_for :: proc(rules: []Downweight_Rule, p: Play) -> int {
+	best, best_score := -1, -1
 	for rule, i in rules {
-		if len(rule.track) > 0 {
-			if rule.track == track && (len(rule.artist) == 0 || rule.artist == artist) do return i
-		} else if rule.artist == artist && by_artist < 0 {
-			by_artist = i
-		}
+		if len(rule.artist) > 0 && rule.artist != p.artist do continue
+		if len(rule.track) > 0 && rule.track != p.track do continue
+		if len(rule.album) > 0 && rule.album != p.album do continue
+		if len(rule.from) > 0 && p.ts_raw < rule.from do continue
+		if len(rule.to) > 0 && p.ts_raw[:min(len(rule.to), len(p.ts_raw))] > rule.to do continue
+		score := 0
+		if len(rule.track) > 0 do score += 8
+		if len(rule.album) > 0 do score += 4
+		if len(rule.artist) > 0 do score += 2
+		if len(rule.from) > 0 || len(rule.to) > 0 do score += 1
+		if score > best_score do best, best_score = i, score
 	}
-	return by_artist
+	return best
 }
 
 // A row's position in its rule's drop order: MurmurHash3's finalizer over
@@ -316,7 +323,7 @@ downweight_cutoffs :: proc(entries: []Input_Entry, clock: ^Clock, exclude: []str
 			if first, dup := seen_rows[row]; dup && first != fi do continue
 			seen_rows[row] = fi
 			if play.artist in excluded do continue
-			if ri := downweight_rule_for(rules, play.artist, play.track); ri >= 0 && qualifies(play) {
+			if ri := downweight_rule_for(rules, play); ri >= 0 && qualifies(play) {
 				append(&pools[ri], downweight_hash(play.ts_raw, play.artist, play.track, play.ms))
 			}
 		}
@@ -335,9 +342,12 @@ downweight_cutoffs :: proc(entries: []Input_Entry, clock: ^Clock, exclude: []str
 }
 
 downweight_label :: proc(rule: Downweight_Rule) -> string {
-	if len(rule.track) == 0 do return rule.artist
-	if len(rule.artist) == 0 do return fmt.aprintf("\"%s\"", rule.track)
-	return fmt.aprintf("\"%s\" by %s", rule.track, rule.artist)
+	parts: [dynamic]string
+	if len(rule.track) > 0 do append(&parts, fmt.aprintf("\"%s\"", rule.track))
+	if len(rule.album) > 0 do append(&parts, fmt.aprintf("album \"%s\"", rule.album))
+	if len(rule.artist) > 0 do append(&parts, fmt.aprintf("by %s" if len(parts) > 0 else "%s", rule.artist))
+	if len(rule.from) > 0 || len(rule.to) > 0 do append(&parts, fmt.aprintf("(%s to %s)", rule.from if len(rule.from) > 0 else "start", rule.to if len(rule.to) > 0 else "end"))
+	return strings.join(parts[:], " ")
 }
 
 // Identity of a row for overlap detection: when it ended, what it was and for

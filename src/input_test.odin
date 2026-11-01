@@ -349,3 +349,41 @@ test_downweight_is_exact_on_duplicate_rows :: proc(t: ^testing.T) {
 	r2, _ := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{artist = "A", remove = 0.5}, {artist = "Z", remove = 1}})
 	testing.expect_value(t, len(r2.plays), 5)
 }
+
+@(test)
+test_downweight_most_specific_rule_wins :: proc(t: ^testing.T) {
+	p := Play{artist = "A", track = "Hit", album = "LP", ts_raw = "2018-07-01T12:00:00Z"}
+	rules := []Downweight_Rule{
+		{artist = "A", remove = 0.1},                                 // 0: score 2
+		{artist = "A", from = "2018", to = "2018", remove = 0.2},     // 1: score 3
+		{album = "LP", remove = 0.3},                                 // 2: score 4
+		{artist = "A", track = "Hit", remove = 0.4},                  // 3: score 10
+		{artist = "A", track = "Hit", from = "2019", remove = 0.5},   // 4: no match (window)
+	}
+	testing.expect_value(t, downweight_rule_for(rules, p), 3)
+	testing.expect_value(t, downweight_rule_for(rules[:3], p), 2)
+	testing.expect_value(t, downweight_rule_for(rules[:2], p), 1)
+	q := p
+	q.ts_raw = "2017-12-31T23:59:59Z"
+	testing.expect_value(t, downweight_rule_for(rules[:2], q), 0) // before the window
+	q.ts_raw = "2018-12-31T23:59:59Z"
+	testing.expect_value(t, downweight_rule_for(rules[:2], q), 1) // "to" 2018 covers all of 2018
+	testing.expect_value(t, downweight_rule_for([]Downweight_Rule{{artist = "A", to = "2018-06", remove = 1}}, p), -1)
+	testing.expect_value(t, downweight_rule_for([]Downweight_Rule{{artist = "A", to = "2018-07", remove = 1}}, p), 0)
+	// Ties go to the rule listed first.
+	testing.expect_value(t, downweight_rule_for([]Downweight_Rule{{artist = "A", remove = 0.1}, {artist = "A", remove = 0.2}}, p), 0)
+}
+
+@(test)
+test_downweight_window_only_touches_its_years :: proc(t: ^testing.T) {
+	dir := fixture_dir("downweight_window")
+	body := fmt.tprintf("[%s]", rows_by("Big", "Hit", 1000)) // all in May 2023
+	write_fixture(dir, "Streaming_History_Audio_2023.json", body)
+	scan := scan_inputs({dir})
+	c := make_clock("UTC")
+	r, _ := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{artist = "Big", from = "2024", remove = 0.5}})
+	testing.expect_value(t, len(r.plays), 1000)
+	testing.expect_value(t, r.summary.downweight_unmatched[0], "Big (2024 to end)")
+	r2, _ := load_plays(scan.entries[:], &c, false, nil, []Downweight_Rule{{artist = "Big", from = "2023-05", to = "2023-05", remove = 0.5}})
+	testing.expect_value(t, len(r2.plays), 500)
+}
