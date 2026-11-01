@@ -1,7 +1,7 @@
 // tuner is a local slider UI for the `downweight` rules in .shr/overrides.json.
-// It loads the same history files the report reads, previews what each rule
-// does to the top artists and songs, and saves the rules back without touching
-// the rest of the overrides file. The report applies them on its next run.
+// It loads the same history files the report reads, previews what the rules do
+// to the top artists, songs, albums and years, and saves them back without
+// touching the rest of the overrides file. The report applies them next run.
 package main
 
 import (
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log"
 	"math"
@@ -33,21 +32,13 @@ var assets embed.FS
 const (
 	minPlayMS = 30_000 // the report's threshold for a play
 	maxBody   = 1 << 20
-	topN      = 25
 )
 
-// Rule mirrors Downweight_Rule in src/identity.odin.
-type Rule struct {
-	Artist string  `json:"artist,omitempty"`
-	Track  string  `json:"track,omitempty"`
-	Remove float64 `json:"remove"`
-}
-
 type row struct {
-	ts, artist, track string
-	ms                int64
-	apple             bool
-	h                 uint64 // rowHash, computed once
+	ts, artist, track, album string
+	ms                       int64
+	apple                    bool
+	h                        uint64 // rowHash, computed once
 }
 
 type store struct {
@@ -91,6 +82,7 @@ func load(dir string) (*store, error) {
 			MS       int64   `json:"ms_played"`
 			Track    *string `json:"master_metadata_track_name"`
 			Artist   *string `json:"master_metadata_album_artist_name"`
+			Album    *string `json:"master_metadata_album_album_name"`
 			Platform *string `json:"platform"`
 		}
 		if json.Unmarshal(data, &recs) != nil {
@@ -100,7 +92,11 @@ func load(dir string) (*store, error) {
 			if r.Track == nil || r.Artist == nil || *r.Track == "" || *r.Artist == "" {
 				continue
 			}
-			s.rows = append(s.rows, row{r.TS, *r.Artist, *r.Track, r.MS, r.Platform != nil && *r.Platform == "Apple Music",
+			album := ""
+			if r.Album != nil {
+				album = *r.Album
+			}
+			s.rows = append(s.rows, row{r.TS, *r.Artist, *r.Track, album, r.MS, r.Platform != nil && *r.Platform == "Apple Music",
 				rowHash(r.TS, *r.Artist, *r.Track, r.MS)})
 		}
 	}
@@ -121,257 +117,6 @@ func load(dir string) (*store, error) {
 		}
 	}
 	return s, nil
-}
-
-// rowHash must match downweight_hash in src/pipeline.odin bit for bit.
-func rowHash(ts, artist, track string, ms int64) uint64 {
-	h := fnv.New64a()
-	fmt.Fprintf(h, "%s\x1f%s\x1f%s\x1f%d", ts, artist, track, ms)
-	return fmix64(h.Sum64())
-}
-
-// cutoffs mirrors downweight_cutoffs: each rule drops exactly
-// round(remove × its plays), the plays with the lowest hashes. Short listens
-// below the same cutoff are dropped too, as in the report.
-type cutoff struct {
-	hash uint64
-	ties int // plays with exactly this hash that are dropped (exact duplicates)
-}
-
-func (s *store) cutoffs(rules []Rule) []cutoff {
-	pools := make([][]uint64, len(rules))
-	for _, r := range s.rows {
-		if s.excluded[r.artist] || r.ms < minPlayMS {
-			continue
-		}
-		if ri := ruleFor(rules, r.artist, r.track); ri >= 0 {
-			pools[ri] = append(pools[ri], r.h)
-		}
-	}
-	out := make([]cutoff, len(rules))
-	for i, pool := range pools {
-		k := min(int(math.Round(rules[i].Remove*float64(len(pool)))), len(pool))
-		if k == 0 {
-			continue
-		}
-		sort.Slice(pool, func(a, b int) bool { return pool[a] < pool[b] })
-		last, below := pool[k-1], 0
-		for below < k && pool[below] < last {
-			below++
-		}
-		out[i] = cutoff{last, k - below}
-	}
-	return out
-}
-
-// ruleFor mirrors downweight_rule_for: a track rule beats an artist rule.
-func ruleFor(rules []Rule, artist, track string) int {
-	byArtist := -1
-	for i, r := range rules {
-		if r.Track != "" {
-			if r.Track == track && (r.Artist == "" || r.Artist == artist) {
-				return i
-			}
-		} else if r.Artist == artist && byArtist < 0 {
-			byArtist = i
-		}
-	}
-	return byArtist
-}
-
-func validate(rules []Rule) error {
-	for i, r := range rules {
-		r.Artist, r.Track = strings.TrimSpace(r.Artist), strings.TrimSpace(r.Track)
-		if r.Artist == "" && r.Track == "" {
-			return fmt.Errorf("rule %d needs an artist, a track or both", i+1)
-		}
-		if !(r.Remove > 0 && r.Remove <= 1) {
-			return fmt.Errorf("rule %d: remove must be above 0 and at most 1", i+1)
-		}
-		rules[i] = r
-	}
-	return nil
-}
-
-// ── Preview ────────────────────────────────────────────────────────────────
-
-type tally struct {
-	plays int
-	ms    int64
-}
-
-type ruleStat struct {
-	Matched     int     `json:"matched"` // plays the rule applies to
-	Dropped     int     `json:"dropped"`
-	HoursBefore float64 `json:"hours_before"`
-	HoursAfter  float64 `json:"hours_after"`
-}
-
-type ranked struct {
-	Name        string  `json:"name"`
-	Artist      string  `json:"artist,omitempty"`
-	Plays       int     `json:"plays"`
-	PlaysBefore int     `json:"plays_before"`
-	Hours       float64 `json:"hours"`
-	HoursBefore float64 `json:"hours_before"`
-	Rank        int     `json:"rank"`
-	RankBefore  int     `json:"rank_before"` // 0 = outside the list before
-}
-
-type preview struct {
-	Rules       []ruleStat `json:"rules"`
-	Plays       int        `json:"plays"`
-	PlaysBefore int        `json:"plays_before"`
-	Hours       float64    `json:"hours"`
-	HoursBefore float64    `json:"hours_before"`
-	Artists     []ranked   `json:"artists"`
-	Tracks      []ranked   `json:"tracks"`
-}
-
-func hours(ms int64) float64 { return math.Round(float64(ms)/3.6e6*10) / 10 }
-
-func (s *store) preview(rules []Rule) preview {
-	stats := make([]tally, len(rules)*2) // [before, after] per rule
-	dropped := make([]int, len(rules))
-	before, after := map[string]*tally{}, map[string]*tally{}
-	tBefore, tAfter := map[[2]string]*tally{}, map[[2]string]*tally{}
-	var all, kept tally
-	cut := s.cutoffs(rules)
-	tiesTaken := make([]int, len(rules))
-	add := func(m map[string]*tally, k string, ms int64) {
-		if m[k] == nil {
-			m[k] = &tally{}
-		}
-		m[k].plays++
-		m[k].ms += ms
-	}
-	addT := func(m map[[2]string]*tally, k [2]string, ms int64) {
-		if m[k] == nil {
-			m[k] = &tally{}
-		}
-		m[k].plays++
-		m[k].ms += ms
-	}
-	for _, r := range s.rows {
-		if s.excluded[r.artist] || r.ms < minPlayMS {
-			continue
-		}
-		key := [2]string{r.artist, r.track}
-		all.plays++
-		all.ms += r.ms
-		add(before, r.artist, r.ms)
-		addT(tBefore, key, r.ms)
-		if ri := ruleFor(rules, r.artist, r.track); ri >= 0 {
-			stats[ri*2].plays++
-			stats[ri*2].ms += r.ms
-			tie := r.h == cut[ri].hash && tiesTaken[ri] < cut[ri].ties
-			if tie {
-				tiesTaken[ri]++
-			}
-			if r.h < cut[ri].hash || tie {
-				dropped[ri]++
-				continue
-			}
-			stats[ri*2+1].plays++
-			stats[ri*2+1].ms += r.ms
-		}
-		kept.plays++
-		kept.ms += r.ms
-		add(after, r.artist, r.ms)
-		addT(tAfter, key, r.ms)
-	}
-
-	p := preview{Plays: kept.plays, PlaysBefore: all.plays, Hours: hours(kept.ms), HoursBefore: hours(all.ms)}
-	for i := range rules {
-		p.Rules = append(p.Rules, ruleStat{stats[i*2].plays, dropped[i], hours(stats[i*2].ms), hours(stats[i*2+1].ms)})
-	}
-
-	// Artists rank by hours, songs by plays, as in the report.
-	rankArtists := func(m map[string]*tally) []string {
-		names := make([]string, 0, len(m))
-		for k := range m {
-			names = append(names, k)
-		}
-		sort.Slice(names, func(i, j int) bool {
-			if m[names[i]].ms != m[names[j]].ms {
-				return m[names[i]].ms > m[names[j]].ms
-			}
-			return names[i] < names[j]
-		})
-		return names
-	}
-	rankTracks := func(m map[[2]string]*tally) [][2]string {
-		keys := make([][2]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if m[keys[i]].plays != m[keys[j]].plays {
-				return m[keys[i]].plays > m[keys[j]].plays
-			}
-			return keys[i][0]+keys[i][1] < keys[j][0]+keys[j][1]
-		})
-		return keys
-	}
-	oldA := map[string]int{}
-	for i, n := range rankArtists(before) {
-		oldA[n] = i + 1
-	}
-	for i, n := range rankArtists(after) {
-		if i >= topN {
-			break
-		}
-		p.Artists = append(p.Artists, ranked{Name: n, Plays: after[n].plays, PlaysBefore: before[n].plays,
-			Hours: hours(after[n].ms), HoursBefore: hours(before[n].ms), Rank: i + 1, RankBefore: oldA[n]})
-	}
-	oldT := map[[2]string]int{}
-	for i, k := range rankTracks(tBefore) {
-		oldT[k] = i + 1
-	}
-	for i, k := range rankTracks(tAfter) {
-		if i >= topN {
-			break
-		}
-		p.Tracks = append(p.Tracks, ranked{Name: k[1], Artist: k[0], Plays: tAfter[k].plays, PlaysBefore: tBefore[k].plays,
-			Hours: hours(tAfter[k].ms), HoursBefore: hours(tBefore[k].ms), Rank: i + 1, RankBefore: oldT[k]})
-	}
-	return p
-}
-
-// candidates lists the biggest artists and songs, for the add-a-rule search.
-func (s *store) candidates() (artists []ranked, tracks []ranked) {
-	a, t := map[string]*tally{}, map[[2]string]*tally{}
-	for _, r := range s.rows {
-		if s.excluded[r.artist] || r.ms < minPlayMS {
-			continue
-		}
-		if a[r.artist] == nil {
-			a[r.artist] = &tally{}
-		}
-		a[r.artist].plays++
-		a[r.artist].ms += r.ms
-		k := [2]string{r.artist, r.track}
-		if t[k] == nil {
-			t[k] = &tally{}
-		}
-		t[k].plays++
-		t[k].ms += r.ms
-	}
-	for n, v := range a {
-		artists = append(artists, ranked{Name: n, Plays: v.plays, Hours: hours(v.ms)})
-	}
-	for k, v := range t {
-		tracks = append(tracks, ranked{Name: k[1], Artist: k[0], Plays: v.plays, Hours: hours(v.ms)})
-	}
-	sort.Slice(artists, func(i, j int) bool { return artists[i].Hours > artists[j].Hours })
-	sort.Slice(tracks, func(i, j int) bool { return tracks[i].Plays > tracks[j].Plays })
-	if len(artists) > 600 {
-		artists = artists[:600]
-	}
-	if len(tracks) > 1500 {
-		tracks = tracks[:1500]
-	}
-	return
 }
 
 // ── overrides.json, keeping every other key and its formatting ─────────────
@@ -529,23 +274,24 @@ func (s *store) routes() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		artists, tracks := s.candidates()
-		writeJSON(w, map[string]any{"rules": rules, "artists": artists, "tracks": tracks, "file": s.overrides})
+		p := s.preview(nil, "")
+		writeJSON(w, map[string]any{"rules": rules, "file": s.overrides, "artists": p.Artists, "tracks": p.Tracks, "albums": p.Albums})
 	})
 	mux.HandleFunc("POST /api/preview", func(w http.ResponseWriter, r *http.Request) {
-		rules, ok := readRules(w, r)
+		body, ok := readBody(w, r)
 		if !ok {
 			return
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		writeJSON(w, s.preview(rules))
+		writeJSON(w, s.preview(body.Rules, body.Focus))
 	})
 	mux.HandleFunc("POST /api/save", func(w http.ResponseWriter, r *http.Request) {
-		rules, ok := readRules(w, r)
+		body, ok := readBody(w, r)
 		if !ok {
 			return
 		}
+		rules := body.Rules
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if err := s.saveRules(rules); err != nil {
@@ -557,24 +303,27 @@ func (s *store) routes() http.Handler {
 	return guard(mux)
 }
 
-func readRules(w http.ResponseWriter, r *http.Request) ([]Rule, bool) {
-	var body struct {
-		Rules []Rule `json:"rules"`
-	}
+type request struct {
+	Rules []Rule `json:"rules"`
+	Focus string `json:"focus,omitempty"` // an artist to break down by song and year
+}
+
+func readBody(w http.ResponseWriter, r *http.Request) (request, bool) {
+	var body request
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
 		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
-		return nil, false
+		return body, false
 	}
 	if body.Rules == nil {
 		body.Rules = []Rule{}
 	}
 	if err := validate(body.Rules); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return nil, false
+		return body, false
 	}
-	return body.Rules, true
+	return body, true
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -613,16 +362,4 @@ func localHost(hostport string) bool {
 		host = h
 	}
 	return host == "127.0.0.1" || host == "localhost" || host == "::1"
-}
-
-// fmix64 is MurmurHash3's finalizer. FNV alone leaves rows that differ only in
-// a few characters (the same song on nearby days) clustered, which made small
-// rules miss their share by several points.
-func fmix64(h uint64) uint64 {
-	h ^= h >> 33
-	h *= 0xff51afd7ed558ccd
-	h ^= h >> 33
-	h *= 0xc4ceb9fe1a85ec53
-	h ^= h >> 33
-	return h
 }
